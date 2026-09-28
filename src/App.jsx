@@ -1056,7 +1056,7 @@ export default function App() {
   const [lang, setLang] = useState(savedSession?.language || "en");
   const [page, setPage] = useState("home");
   const [viewMember, setViewMember] = useState(null);
-  const [darkMode, setDarkMode] = useState(() => { try { const v = localStorage.getItem("zx7_dark"); return v === null ? true : v === "1"; } catch { return true; } });
+  const [darkMode, setDarkMode] = useState(() => { try { const v = localStorage.getItem("zx7_dark"); return v === "1"; } catch { return false; } });
   useEffect(() => { document.body.classList.toggle("dark", darkMode); try { localStorage.setItem("zx7_dark", darkMode ? "1" : "0"); } catch {} }, [darkMode]);
   const [members, setMembersState] = useState([]);
   const [csSignups, setCsSignupsState] = useState([]);
@@ -1066,8 +1066,8 @@ export default function App() {
   const [csTeams, setCsTeamsState] = useState({});
   const [dsTeams, setDsTeamsState] = useState({});
   const [stormSettings, setStormSettings] = useState({ canyon: false, desert: false, canyon_active: true, desert_active: true });
-  const [customEvents, setCustomEventsState] = useState([]);
   const [vsMode, setVsModeState] = useState("PUSH");
+  const [battlePlans, setBattlePlans] = useState({ canyon: null, desert: null }); // custom plans saved by R4/admin
   const [trains, setTrainsState] = useState([]);
   const [trainGoals, setTrainGoalsState] = useState([]);
   const [toast, setToast] = useState(null);
@@ -1097,12 +1097,6 @@ export default function App() {
     availability: s.availability, timePreference: s.time_preference, canFlexTime: s.can_flex_time || "", week: s.week_start,
   });
 
-  const mapEvent = (e) => ({
-    id: e.id, type: e.type, title: e.title,
-    date: parseSupabaseDate(e.event_date), description: e.description || "",
-    recurring: e.recurring || false, recurringDays: e.recurring_days || null,
-  });
-
   const mapTrain = (tr) => ({
     id: tr.id, date: tr.train_date, time: tr.train_time,
     conductorId: tr.conductor_id, guardianId: tr.guardian_id, weekStart: tr.week_start,
@@ -1126,7 +1120,6 @@ export default function App() {
         { data: csAllData },
         { data: dsAllData },
         { data: teamsData },
-        { data: eventsData },
         { data: trainsData },
         { data: trainGoalsData },
         { data: stormSettingsData },
@@ -1138,7 +1131,6 @@ export default function App() {
         supabase.from("canyon_signups").select("member_id,week_start").order("week_start", { ascending: false }).limit(10000),
         supabase.from("desert_signups").select("member_id,week_start,power,squad_type").order("week_start", { ascending: false }).limit(10000),
         supabase.from("battle_teams").select("*"),
-        supabase.from("events").select("*").order("event_date", { ascending: true }),
         supabase.from("trains").select("*").order("train_date", { ascending: true }),
         supabase.from("train_goals").select("*").order("week_start", { ascending: false }),
         supabase.from("storm_settings").select("*"),
@@ -1179,7 +1171,6 @@ export default function App() {
         setCsTeamsState(cs); setDsTeamsState(ds);
       }
 
-      if (eventsData) setCustomEventsState(eventsData.map(mapEvent));
       if (trainsData) setTrainsState(trainsData.map(mapTrain));
       if (trainGoalsData) setTrainGoalsState(trainGoalsData.map(g => ({ id: g.id, weekStart: g.week_start, goal: g.goal })));
 
@@ -1197,6 +1188,8 @@ export default function App() {
       if (appSettingsData) {
         const vs = appSettingsData.find(r => r.key === "vs_mode");
         if (vs?.value) setVsModeState(vs.value);
+        const parsePlan = (key) => { const row = appSettingsData.find(r => r.key === key); try { return row?.value ? JSON.parse(row.value) : null; } catch { return null; } };
+        setBattlePlans({ canyon: parsePlan("battle_plan_canyon"), desert: parsePlan("battle_plan_desert") });
       }
 
       // Restore session
@@ -1251,13 +1244,6 @@ export default function App() {
           if (payload.eventType === "DELETE") setDsSignupsState(prev => prev.filter(s => !(String(s.userId) === String(payload.old.member_id) && s.week === payload.old.week_start)));
         }).subscribe(),
 
-      supabase.channel("events-changes")
-        .on("postgres_changes", { event: "*", schema: "public", table: "events" }, (payload) => {
-          if (payload.eventType === "INSERT") setCustomEventsState(prev => prev.some(e => String(e.id) === String(payload.new.id)) ? prev : [...prev, mapEvent(payload.new)].sort((a,b) => new Date(a.date)-new Date(b.date)));
-          if (payload.eventType === "UPDATE") setCustomEventsState(prev => prev.map(e => String(e.id) === String(payload.new.id) ? mapEvent(payload.new) : e).sort((a,b) => new Date(a.date)-new Date(b.date)));
-          if (payload.eventType === "DELETE") setCustomEventsState(prev => prev.filter(e => String(e.id) !== String(payload.old.id)));
-        }).subscribe(),
-
       supabase.channel("trains-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "trains" }, (payload) => {
           if (payload.eventType === "INSERT") setTrainsState(prev => [...prev.filter(t => t.id !== payload.new.id), mapTrain(payload.new)].sort((a,b) => a.date.localeCompare(b.date)));
@@ -1282,6 +1268,11 @@ export default function App() {
       supabase.channel("app-settings-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, (payload) => {
           if (payload.new?.key === "vs_mode" && payload.new.value) setVsModeState(payload.new.value);
+          if (payload.new?.key?.startsWith("battle_plan_")) {
+            const type = payload.new.key.replace("battle_plan_", "");
+            let plan = null; try { plan = payload.new.value ? JSON.parse(payload.new.value) : null; } catch {}
+            setBattlePlans(prev => ({ ...prev, [type]: plan }));
+          }
         }).subscribe(),
     ];
 
@@ -1343,6 +1334,14 @@ export default function App() {
     setVsModeState(next);
     const { error } = await supabase.from("app_settings").upsert({ key: "vs_mode", value: next, updated_at: new Date().toISOString() }, { onConflict: "key" });
     if (error) { setVsModeState(prevMode); showToast("⚠️ Couldn't save the VS goal — try again."); return false; }
+    return true;
+  };
+
+  // plan = { phases: [{ time, color, steps: [] }], notes: [], map: dataURL | null } — or null to go back to the default plan
+  const saveBattlePlan = async (type, plan) => {
+    const { error } = await supabase.from("app_settings").upsert({ key: `battle_plan_${type}`, value: plan ? JSON.stringify(plan) : null, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    if (error) { console.error("[battle plan save]", error); showToast("⚠️ Couldn't save the battle plan — try again."); return false; }
+    setBattlePlans(prev => ({ ...prev, [type]: plan }));
     return true;
   };
 
@@ -1410,9 +1409,6 @@ export default function App() {
   };
   const setCsTeams = makeTeamsSetter("canyon", setCsTeamsState);
   const setDsTeams = makeTeamsSetter("desert", setDsTeamsState);
-
-  // Inserts/updates for events are done directly in AdminSignups; this only updates local state.
-  const setCustomEvents = (updater) => setCustomEventsState(prev => typeof updater === "function" ? updater(prev) : updater);
 
   const t = T[lang] || T.en;
 
@@ -1502,11 +1498,11 @@ export default function App() {
       <div className="app-shell">
         <TopBar user={user} t={t} onLogout={logout} setPage={setPage} darkMode={darkMode} setDarkMode={setDarkMode} />
         <main className="main-content">
-          {page === "home" && <HomePage user={user} csSignups={csSignups} dsSignups={dsSignups} csTeams={csTeams} dsTeams={dsTeams} setCsSignups={setCsSignups} setDsSignups={setDsSignups} incrementSignupCount={incrementSignupCount} t={t} showToast={showToast} customEvents={customEvents} setPage={setPage} vsMode={vsMode} setVsMode={setVsMode} isR4={isR4} trains={trains} stormSettings={stormSettings} />}
+          {page === "home" && <HomePage user={user} csSignups={csSignups} dsSignups={dsSignups} csTeams={csTeams} dsTeams={dsTeams} setCsSignups={setCsSignups} setDsSignups={setDsSignups} incrementSignupCount={incrementSignupCount} t={t} showToast={showToast} setPage={setPage} vsMode={vsMode} setVsMode={setVsMode} isR4={isR4} trains={trains} stormSettings={stormSettings} />}
           {page === "trains" && <TrainsPage user={user} trains={trains} trainGoals={trainGoals} members={members} />}
-          {page === "battle" && <BattlePlansPage user={user} csTeams={csTeams} dsTeams={dsTeams} t={t} stormSettings={stormSettings} isR4={isR4} />}
+          {page === "battle" && <BattlePlansPage user={user} csTeams={csTeams} dsTeams={dsTeams} t={t} stormSettings={stormSettings} isR4={isR4} battlePlans={battlePlans} saveBattlePlan={saveBattlePlan} showToast={showToast} />}
           {page === "profile" && <ProfilePage user={user} setUser={setUser} setMembers={setMembers} t={t} setLang={setLang} showToast={showToast} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} />}
-          {page === "admin" && isR4 && <AdminPage setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} user={user} members={members} setMembers={setMembers} csSignups={csSignups} dsSignups={dsSignups} setCsSignups={setCsSignups} setDsSignups={setDsSignups} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} customEvents={customEvents} setCustomEvents={setCustomEvents} trains={trains} trainGoals={trainGoals} t={t} showToast={showToast} isAdmin={isAdmin} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
+          {page === "admin" && isR4 && <AdminPage setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} user={user} members={members} setMembers={setMembers} csSignups={csSignups} dsSignups={dsSignups} setCsSignups={setCsSignups} setDsSignups={setDsSignups} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} trains={trains} trainGoals={trainGoals} t={t} showToast={showToast} isAdmin={isAdmin} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
           {page === "calculators" && <CalculatorsPage />}
         </main>
         <BottomNav page={page} setPage={setPage} t={t} isR4={isR4} members={members} />
@@ -1554,7 +1550,7 @@ function AuthPage({ onLogin, members, setMembers, t }) {
       username: form.username,
       password_hash: form.password,
       role: "member",
-      approved: false,
+      approved: true,
       profession: form.profession,
       language: form.language,
       power: 0,
@@ -1700,16 +1696,11 @@ function BottomNav({ page, setPage, t, isR4, members }) {
 }
 
 // ─── HOME PAGE ────────────────────────────────────────────────────────────────
-function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, setDsSignups, incrementSignupCount, t, showToast, customEvents, setPage, vsMode, setVsMode, isR4, trains, stormSettings }) {
+function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, setDsSignups, incrementSignupCount, t, showToast, setPage, vsMode, setVsMode, isR4, trains, stormSettings }) {
   const [signupModal, setSignupModal] = useState(null);
 
   const myCS = csSignups.find(s => String(s.userId) === String(user.id));
   const myDS = dsSignups.find(s => String(s.userId) === String(user.id));
-
-  const upcomingEvents = (customEvents || [])
-    .filter(ev => new Date(ev.date) >= new Date())
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .slice(0, 5);
 
   return (
     <div>
@@ -1820,14 +1811,6 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
         <SignupStatusCard type="desert" label={t.desertStorm} mySignup={myDS} isR4={isR4} isOpen={stormSettings?.desert ?? false} isSeasonActive={stormSettings?.desert_active ?? true} onSignup={() => setSignupModal("desert")} onRevoke={() => { setDsSignups(s => s.filter(x => String(x.userId) !== String(user.id))); showToast("Registration revoked."); }} t={t} />
       </div>
 
-      {/* Upcoming Battles */}
-      <div>
-        <h2 className="section-title" style={{ marginBottom: 12 }}>{t.upcomingEvents}</h2>
-        {upcomingEvents.length > 0
-          ? upcomingEvents.map(ev => <EventCard key={ev.id} ev={ev} user={user} t={t} />)
-          : <div style={{ color: "var(--text-dim)", fontSize: 14, padding: "12px 0" }}>{t.noEvents}</div>}
-      </div>
-
       {/* Modals */}
       {signupModal && <SignupModal type={signupModal} user={user} existing={signupModal === "canyon" ? myCS : myDS}
         lastSignup={null}
@@ -1847,7 +1830,7 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
 }
 
 // ─── ADMIN PAGE ───────────────────────────────────────────────────────────────
-function AdminPage({ setViewMember, csAllSignups, dsAllSignups, user, members, setMembers, csSignups, dsSignups, setCsSignups, setDsSignups, csTeams, setCsTeams, dsTeams, setDsTeams, customEvents, setCustomEvents, trains, trainGoals, t, showToast, isAdmin, stormSettings, setStormSettings }) {
+function AdminPage({ setViewMember, csAllSignups, dsAllSignups, user, members, setMembers, csSignups, dsSignups, setCsSignups, setDsSignups, csTeams, setCsTeams, dsTeams, setDsTeams, trains, trainGoals, t, showToast, isAdmin, stormSettings, setStormSettings }) {
   const [tab, setTab] = useState("signups");
   const pending = members.filter(m => !m.approved);
   const tabDef = [
@@ -1869,7 +1852,7 @@ function AdminPage({ setViewMember, csAllSignups, dsAllSignups, user, members, s
           ))}
         </div>
       </div>
-      {tab === "signups" && <AdminSignups setMembers={setMembers} setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} csSignups={csSignups} dsSignups={dsSignups} members={members} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} t={t} showToast={showToast} isAdmin={isAdmin} setCsSignups={setCsSignups} setDsSignups={setDsSignups} customEvents={customEvents} setCustomEvents={setCustomEvents} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
+      {tab === "signups" && <AdminSignups setMembers={setMembers} setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} csSignups={csSignups} dsSignups={dsSignups} members={members} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} t={t} showToast={showToast} isAdmin={isAdmin} setCsSignups={setCsSignups} setDsSignups={setDsSignups} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
       {tab === "members" && <AdminMembers setViewMember={setViewMember} members={members} setMembers={setMembers} t={t} showToast={showToast} isAdmin={isAdmin} user={user} />}
       {tab === "trains" && <AdminTrains trains={trains} trainGoals={trainGoals} members={members} showToast={showToast} />}
       {tab === "data" && isAdmin && <AdminData members={members} setMembers={setMembers} csSignups={csAllSignups} dsSignups={dsAllSignups} t={t} showToast={showToast} />}
@@ -2120,7 +2103,7 @@ const DS_NOTES = [
 ];
 
 // ─── BATTLE PLANS PAGE ────────────────────────────────────────────────────────
-function BattlePlansPage({ user, csTeams, dsTeams, t, stormSettings, isR4 }) {
+function BattlePlansPage({ user, csTeams, dsTeams, t, stormSettings, isR4, battlePlans, saveBattlePlan, showToast }) {
   const canyonActive = stormSettings?.canyon_active ?? true;
   // Default tab to desert when canyon is off-season for non-R4
   const [tab, setTab] = useState((!canyonActive && !isR4) ? "desert" : "canyon");
@@ -2145,14 +2128,15 @@ function BattlePlansPage({ user, csTeams, dsTeams, t, stormSettings, isR4 }) {
         {showCanyon && <button className={`tab ${tab === "canyon" ? "active" : ""}`} onClick={() => setTab("canyon")}>🏔️ {t.canyonStorm}{!canyonActive && isR4 && <span style={{ fontSize: 10, marginLeft: 5, opacity: 0.6 }}>(off-season)</span>}</button>}
         <button className={`tab ${tab === "desert" ? "active" : ""}`} onClick={() => setTab("desert")}>🏜️ {t.desertStorm}</button>
       </div>
-      {tab === "canyon" && showCanyon && <BattlePlanView data={csData} weekKey={csWeek} type="canyon" user={user} mapSrc={CS_MAP} mapAlt="Canyon Storm map" plan={CS_PLAN} notes={CS_NOTES} t={t} />}
-      {tab === "desert" && <BattlePlanView data={dsData} weekKey={dsWeek} type="desert" user={user} mapSrc={DS_MAP} mapAlt="Desert Storm map" plan={DS_PLAN} notes={DS_NOTES} t={t} />}
+      {tab === "canyon" && showCanyon && <BattlePlanView key="canyon" data={csData} weekKey={csWeek} type="canyon" user={user} mapSrc={battlePlans?.canyon?.map || CS_MAP} mapAlt="Canyon Storm map" plan={battlePlans?.canyon?.phases || CS_PLAN} notes={battlePlans?.canyon?.notes || CS_NOTES} isCustom={!!battlePlans?.canyon} defaultMap={CS_MAP} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
+      {tab === "desert" && <BattlePlanView key="desert" data={dsData} weekKey={dsWeek} type="desert" user={user} mapSrc={battlePlans?.desert?.map || DS_MAP} mapAlt="Desert Storm map" plan={battlePlans?.desert?.phases || DS_PLAN} notes={battlePlans?.desert?.notes || DS_NOTES} isCustom={!!battlePlans?.desert} defaultMap={DS_MAP} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
     </div>
   );
 }
 
-function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes, t }) {
+function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes, isCustom, defaultMap, isR4, saveBattlePlan, showToast, t }) {
   const [mapBig, setMapBig] = useState(false);
+  const [editing, setEditing] = useState(false);
   const username = user.username;
   const userId = String(user.id);
 
@@ -2304,7 +2288,16 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
       <div className="divider" style={{ margin: "20px 0" }} />
 
       {/* Battle Plan Title */}
-      <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 20, marginBottom: 16 }}>{t.battlePlanStrategy}</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 16 }}>
+        <div style={{ fontFamily: "'Rajdhani', sans-serif", fontWeight: 700, fontSize: 21 }}>{t.battlePlanStrategy}</div>
+        {isR4 && !editing && <button className="btn btn-sm btn-secondary" onClick={() => setEditing(true)}>✏️ Edit Plan</button>}
+      </div>
+
+      {editing ? (
+        <BattlePlanEditor type={type} plan={plan} notes={notes} mapSrc={mapSrc} defaultMap={defaultMap} isCustom={isCustom}
+          onCancel={() => setEditing(false)}
+          onSave={async (newPlan) => { const ok = await saveBattlePlan(type, newPlan); if (ok) { setEditing(false); showToast(newPlan ? "Battle plan saved ✓" : "Reset to the default plan ✓"); } }} />
+      ) : <>
 
       {/* Map — tap to expand */}
       <div style={{ marginBottom: 20 }}>
@@ -2337,6 +2330,8 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
         ))}
       </div>
 
+      </>}
+
       {/* Full-screen map modal */}
       {mapBig && (
         <div className="modal-overlay" onClick={() => setMapBig(false)} style={{ alignItems: "flex-start", paddingTop: 20 }}>
@@ -2346,6 +2341,128 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── BATTLE PLAN EDITOR (R4 / Admin) ─────────────────────────────────────────
+const PLAN_COLORS = [["var(--gold)", "Blue"], ["var(--blue)", "Teal"], ["var(--green)", "Green"], ["var(--red)", "Red"], ["var(--purple)", "Purple"]];
+
+// Shrink an uploaded image so it can be stored in the database
+const resizeImageToDataUrl = (file, maxSize = 1400) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = reject;
+  reader.onload = () => {
+    const img = new Image();
+    img.onerror = reject;
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function BattlePlanEditor({ type, plan, notes, mapSrc, defaultMap, isCustom, onSave, onCancel }) {
+  const [phases, setPhases] = useState(() => plan.map(p => ({ time: p.time, color: p.color, stepsText: (p.steps || []).join("\n") })));
+  const [notesText, setNotesText] = useState(() => notes.join("\n"));
+  const [map, setMap] = useState(mapSrc === defaultMap ? null : mapSrc);
+  const [saving, setSaving] = useState(false);
+  const [mapError, setMapError] = useState("");
+
+  const updatePhase = (i, field, value) => setPhases(ps => ps.map((p, j) => j === i ? { ...p, [field]: value } : p));
+  const movePhase = (i, dir) => setPhases(ps => {
+    const j = i + dir; if (j < 0 || j >= ps.length) return ps;
+    const next = [...ps]; [next[i], next[j]] = [next[j], next[i]]; return next;
+  });
+  const lines = (txt) => txt.split("\n").map(l => l.trim()).filter(Boolean);
+
+  const handleMap = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMapError("");
+    try { setMap(await resizeImageToDataUrl(file)); }
+    catch { setMapError("Couldn't read that image — try a JPG or PNG."); }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    await onSave({
+      phases: phases.filter(p => p.time.trim() || p.stepsText.trim()).map(p => ({ time: p.time.trim(), color: p.color, steps: lines(p.stepsText) })),
+      notes: lines(notesText),
+      map: map || null,
+    });
+    setSaving(false);
+  };
+
+  const resetToDefault = async () => {
+    if (!window.confirm(`Reset the ${type === "canyon" ? "Canyon" : "Desert"} Storm plan back to the original? Your edits will be lost.`)) return;
+    setSaving(true);
+    await onSave(null);
+    setSaving(false);
+  };
+
+  return (
+    <div className="stack" style={{ gap: 16 }}>
+      {/* Map */}
+      <div className="card">
+        <div className="card-header"><div className="card-title">🗺️ Battle Map</div></div>
+        <div className="card-body">
+          <img src={map || defaultMap} alt="Battle map" style={{ width: "100%", borderRadius: 10, border: "1px solid var(--border)", display: "block", marginBottom: 10 }} />
+          <div className="row wrap" style={{ gap: 8 }}>
+            <label className="btn btn-sm btn-secondary" style={{ cursor: "pointer" }}>
+              📷 Change map image
+              <input type="file" accept="image/*" onChange={handleMap} style={{ display: "none" }} />
+            </label>
+            {map && <button className="btn btn-sm btn-ghost" onClick={() => setMap(null)}>Use default map</button>}
+          </div>
+          {mapError && <div className="form-hint" style={{ color: "var(--red)" }}>{mapError}</div>}
+        </div>
+      </div>
+
+      {/* Phases */}
+      <div className="card">
+        <div className="card-header"><div className="card-title">⏱ Plan Steps</div></div>
+        <div className="card-body stack">
+          {phases.map((p, i) => (
+            <div key={i} style={{ borderLeft: `3px solid ${p.color}`, paddingLeft: 12 }}>
+              <div className="row" style={{ gap: 6, marginBottom: 6 }}>
+                <input className="form-input" value={p.time} onChange={e => updatePhase(i, "time", e.target.value)} placeholder="Heading, e.g. ⏱ 5-Min Mark" style={{ flex: 1, padding: "9px 12px", fontWeight: 700 }} />
+                <select className="form-input form-select" value={p.color} onChange={e => updatePhase(i, "color", e.target.value)} style={{ width: 100, padding: "9px 30px 9px 10px", fontSize: 13 }} aria-label="Color">
+                  {PLAN_COLORS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+              <textarea className="form-input" rows={Math.max(3, p.stepsText.split("\n").length + 1)} value={p.stepsText} onChange={e => updatePhase(i, "stepsText", e.target.value)} placeholder="One step per line" style={{ resize: "vertical", fontSize: 14 }} />
+              <div className="row" style={{ gap: 4, marginTop: 6 }}>
+                <button className="btn btn-sm btn-ghost" onClick={() => movePhase(i, -1)} disabled={i === 0} aria-label="Move up">↑</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => movePhase(i, 1)} disabled={i === phases.length - 1} aria-label="Move down">↓</button>
+                <button className="btn btn-sm btn-ghost" style={{ color: "var(--red)", marginLeft: "auto" }} onClick={() => setPhases(ps => ps.filter((_, j) => j !== i))}>🗑️ Remove</button>
+              </div>
+            </div>
+          ))}
+          <button className="btn btn-sm btn-secondary" onClick={() => setPhases(ps => [...ps, { time: "", color: "var(--gold)", stepsText: "" }])}>➕ Add a step group</button>
+          <div className="form-hint">Each box is one section of the plan. Put one instruction per line.</div>
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div className="card">
+        <div className="card-header"><div className="card-title">📋 Notes & Reminders</div></div>
+        <div className="card-body">
+          <textarea className="form-input" rows={Math.max(4, notesText.split("\n").length + 1)} value={notesText} onChange={e => setNotesText(e.target.value)} placeholder="One note per line" style={{ resize: "vertical", fontSize: 14 }} />
+        </div>
+      </div>
+
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving..." : "💾 Save Plan"}</button>
+        <button className="btn btn-secondary" onClick={onCancel} disabled={saving}>Cancel</button>
+        {isCustom && <button className="btn btn-danger" style={{ marginLeft: "auto" }} onClick={resetToDefault} disabled={saving}>↺ Reset to original</button>}
+      </div>
     </div>
   );
 }
@@ -3104,7 +3221,7 @@ function StormLeaderboard({ csTeams, dsTeams, csSignups, dsSignups, members, get
   );
 }
 
-function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, csSignups, dsSignups, members, csTeams, setCsTeams, dsTeams, setDsTeams, t, showToast, isAdmin, setCsSignups, setDsSignups, customEvents, setCustomEvents, stormSettings, setStormSettings }) {
+function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, csSignups, dsSignups, members, csTeams, setCsTeams, dsTeams, setDsTeams, t, showToast, isAdmin, setCsSignups, setDsSignups, stormSettings, setStormSettings }) {
   const [tab, setTab] = useState("canyon");
   const [sorts, setSorts] = useState([]);
   const [view, setView] = useState("current");
@@ -3329,57 +3446,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
     if (tab === "canyon") setCsTeams(prev => ({ ...prev, [weekKey]: teamData }));
     else setDsTeams(prev => ({ ...prev, [weekKey]: teamData }));
 
-    // Auto-create/update events for each team time
-    if (timeA && timeA !== "TBD") {
-      const isCanyon = tab === "canyon";
-      const eventType = isCanyon ? "canyon" : "desert";
-      const battleKey = getSignupWeek(isCanyon ? "canyon" : "desert");
-      const battleDate = new Date(battleKey + "T00:00:00Z");
-      const battleDateStr = battleDate.toISOString().split("T")[0];
-
-      const createOrUpdateEvent = async (time, teamLabel) => {
-        const paddedTime = time.includes(":") ? time.split(":").map(p => p.padStart(2, "0")).join(":") : time;
-        const evDate = new Date(battleDateStr + "T" + paddedTime + ":00Z");
-        evDate.setUTCHours(evDate.getUTCHours() + SERVER_UTC_OFFSET_HOURS);
-        const title = `${isCanyon ? "🏔️ Canyon Storm" : "🏜️ Desert Storm"} — Team ${teamLabel}`;
-        const description = `${time} server time`;
-        // Match on type + team label only — update time if already exists
-        const existing = customEvents?.find(e =>
-          e.type === eventType &&
-          e.title && e.title.includes(`Team ${teamLabel}`)
-        );
-        if (existing) {
-          await supabase.from("events").update({ event_date: evDate.toISOString(), title, description }).eq("id", existing.id);
-          setCustomEvents(ev => ev.map(e => e.id === existing.id ? { ...e, date: evDate, title, description } : e));
-        } else {
-          const { data } = await supabase.from("events").insert({ type: eventType, title, event_date: evDate.toISOString(), description }).select().single();
-          if (data) setCustomEvents(ev => [...ev, { id: data.id, type: data.type, title: data.title, date: parseSupabaseDate(data.event_date), description: data.description || "" }].sort((a,b) => new Date(a.date) - new Date(b.date)));
-        }
-      };
-
-      await createOrUpdateEvent(timeA, "A");
-      if (timeB && timeB !== "TBD") await createOrUpdateEvent(timeB, "B");
-    }
-
     showToast("Teams saved! ✓");
-  };
-
-  const clearTeams = async () => {
-    const stormName = tab === "canyon" ? "Canyon Storm" : "Desert Storm";
-    if (!window.confirm(`Clear ${stormName} teams AND all sign-ups for this week?\n\nMembers will see sign-ups cleared and need to re-register when sign-ups open again.`)) return;
-    const weekKey = getBattleWeekKey();
-    const empty = { timeA, timeB, teamA: [], teamB: [], slotData: {}, attendance: {} };
-    if (tab === "canyon") {
-      setCsTeams(prev => ({ ...prev, [weekKey]: empty }));
-      setCsSignups([]);
-    } else {
-      setDsTeams(prev => ({ ...prev, [weekKey]: empty }));
-      setDsSignups([]);
-    }
-    setAssignments({});
-    const table = tab === "canyon" ? "canyon_signups" : "desert_signups";
-    await supabase.from(table).delete().eq("week_start", weekKey);
-    showToast(`${stormName} teams and sign-ups cleared ✓`);
   };
 
   const exportCSV = (signups) => {
@@ -3545,9 +3612,6 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
               title={`When disabled, ${tab === "canyon" ? "Canyon" : "Desert"} Storm is completely hidden from members`}
             >
               {(stormSettings?.[`${tab}_active`] ?? true) ? "🌙 Disable Season" : "☀️ Enable Season"}
-            </button>
-            <button className="btn btn-sm btn-secondary" onClick={clearTeams}>
-              🗑️ Clear Teams &amp; Sign-Ups
             </button>
           </div>
 
@@ -4152,7 +4216,7 @@ function TrainsPage({ user, trains, trainGoals, members }) {
 
   return (
     <div>
-      <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 22, marginBottom: 4 }}>🚂 Trains</h1>
+      <h1 style={{ fontFamily: "'Rajdhani', sans-serif", fontSize: 22, marginBottom: 4 }}>🚂 Trains</h1>
       <p style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 20 }}>Daily train schedule and weekly goals</p>
 
       {/* Next week goal */}
