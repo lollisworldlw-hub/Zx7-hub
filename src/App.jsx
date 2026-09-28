@@ -812,6 +812,7 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .assign-card:hover { border-color: var(--gold); }
 .assign-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-pale); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
 .top-bar { box-shadow: var(--glow); }
+.install-card { background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; box-shadow: var(--glow); }
 @media (max-width: 420px) { .top-bar-name { display: none; } .top-bar { padding: 0 12px; } }
 
 `;
@@ -1498,6 +1499,7 @@ export default function App() {
       <div className="app-shell">
         <TopBar user={user} t={t} onLogout={logout} setPage={setPage} darkMode={darkMode} setDarkMode={setDarkMode} />
         <main className="main-content">
+          {page === "home" && <InstallBanner />}
           {page === "home" && <HomePage user={user} csSignups={csSignups} dsSignups={dsSignups} csTeams={csTeams} dsTeams={dsTeams} setCsSignups={setCsSignups} setDsSignups={setDsSignups} incrementSignupCount={incrementSignupCount} t={t} showToast={showToast} setPage={setPage} vsMode={vsMode} setVsMode={setVsMode} isR4={isR4} trains={trains} stormSettings={stormSettings} />}
           {page === "trains" && <TrainsPage user={user} trains={trains} trainGoals={trainGoals} members={members} />}
           {page === "battle" && <BattlePlansPage user={user} csTeams={csTeams} dsTeams={dsTeams} t={t} stormSettings={stormSettings} isR4={isR4} battlePlans={battlePlans} saveBattlePlan={saveBattlePlan} showToast={showToast} />}
@@ -1640,6 +1642,63 @@ function AuthPage({ onLogin, members, setMembers, t }) {
     </div>
   );
 }
+// ─── ADD TO HOME SCREEN BANNER ────────────────────────────────────────────────
+function InstallBanner() {
+  const isStandalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isIOS = /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  const [canPrompt, setCanPrompt] = useState(() => !!window.__zx7InstallPrompt);
+  const [dismissed, setDismissed] = useState(() => { try { return localStorage.getItem("zx7_install_dismissed") === "1"; } catch { return false; } });
+  const [showSteps, setShowSteps] = useState(false);
+
+  useEffect(() => {
+    const onAvail = () => setCanPrompt(true);
+    const onInstalled = () => { window.__zx7InstallPrompt = null; setCanPrompt(false); setDismissed(true); };
+    window.addEventListener("zx7-install-available", onAvail);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => { window.removeEventListener("zx7-install-available", onAvail); window.removeEventListener("appinstalled", onInstalled); };
+  }, []);
+
+  if (isStandalone || dismissed) return null;
+  if (!canPrompt && !isIOS) return null; // browser can't install (e.g. desktop Firefox) — don't nag
+
+  const dismiss = () => { setDismissed(true); try { localStorage.setItem("zx7_install_dismissed", "1"); } catch {} };
+  const install = async () => {
+    const ev = window.__zx7InstallPrompt;
+    if (ev) {
+      ev.prompt();
+      const choice = await ev.userChoice.catch(() => null);
+      window.__zx7InstallPrompt = null; setCanPrompt(false);
+      if (choice?.outcome === "accepted") dismiss();
+    } else if (showSteps) {
+      dismiss();
+    } else {
+      setShowSteps(true);
+    }
+  };
+
+  return (
+    <div className="install-card">
+      <img src={LOGO_SRC} alt="" style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>Add Zx7 Hub to your home screen</div>
+        <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>Opens full-screen like a real app.</div>
+        {showSteps && (
+          <ol style={{ fontSize: 13, color: "var(--text-mid)", margin: "8px 0 0 18px", lineHeight: 1.6 }}>
+            <li>Tap the <strong>Share</strong> button <span aria-hidden="true">(□↑)</span> in Safari</li>
+            <li>Scroll down and tap <strong>Add to Home Screen</strong></li>
+            <li>Tap <strong>Add</strong></li>
+          </ol>
+        )}
+        <div className="row" style={{ gap: 8, marginTop: 10 }}>
+          <button className="btn btn-sm btn-primary" onClick={install}>{canPrompt ? "📲 Install" : showSteps ? "Got it" : "📲 Show me how"}</button>
+          <button className="btn btn-sm btn-ghost" onClick={dismiss}>Not now</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── TOP BAR ──────────────────────────────────────────────────────────────────
 function TopBar({ user, t, onLogout, setPage, darkMode, setDarkMode }) {
   return (

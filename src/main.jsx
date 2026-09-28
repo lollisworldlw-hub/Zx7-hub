@@ -7,3 +7,15 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>
 )
+
+// Register the service worker so the app can be added to the home screen
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}))
+}
+
+// Chrome/Android fire this when the app can be installed — keep it so the in-app button can use it
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  window.__zx7InstallPrompt = e
+  window.dispatchEvent(new Event('zx7-install-available'))
+})
