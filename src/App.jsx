@@ -3597,12 +3597,8 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
         );
       })()}
 
-      {/* Admin: manually add a member sign-up */}
-      {isAdmin && (
-        <div style={{ marginBottom: 14 }}>
-
-          {/* Sign-up toggle + clear — always visible */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+      {/* Storm switches — R4 and Admin */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
             <button
               className={`btn btn-sm ${(stormSettings?.[tab] ?? false) ? "btn-danger" : "btn-green"}`}
               onClick={() => toggleSignups(tab)}
@@ -3618,6 +3614,10 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
             </button>
           </div>
 
+
+      {/* Admin only: manually add a member sign-up, save teams */}
+      {isAdmin && (
+        <div style={{ marginBottom: 14 }}>
           {!adminSignupOpen ? (
             <div className="row" style={{gap:8}}>
               <button className="btn btn-sm btn-primary" onClick={openAdminSignup}>➕ Add Member Sign-Up</button>
