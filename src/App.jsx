@@ -1545,12 +1545,15 @@ function AuthPage({ onLogin, members, setMembers, t }) {
     try {
     const { data: existing } = await supabase.from("members").select("id").ilike("username", form.username).maybeSingle();
     if (existing) { setError("Username already taken."); setSubmitting(false); return; }
+    // Admin switch: when "require_approval" is on, new accounts wait for approval
+    const { data: approvalSetting } = await supabase.from("app_settings").select("value").eq("key", "require_approval").maybeSingle();
+    const needsApproval = approvalSetting?.value === "true";
     const { error } = await supabase.from("members").insert({
       member_code: generateMemberId(),
       username: form.username,
       password_hash: form.password,
       role: "member",
-      approved: true,
+      approved: !needsApproval,
       profession: form.profession,
       language: form.language,
       power: 0,
@@ -3897,10 +3900,37 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
     setResetModal(null);
     setTempPw("");
   };
+  const [requireApproval, setRequireApproval] = useState(null); // null = loading
+  useEffect(() => {
+    supabase.from("app_settings").select("value").eq("key", "require_approval").maybeSingle()
+      .then(({ data }) => setRequireApproval(data?.value === "true"));
+  }, []);
+  const toggleRequireApproval = async () => {
+    const next = !requireApproval;
+    const { error } = await supabase.from("app_settings").upsert({ key: "require_approval", value: String(next), updated_at: new Date().toISOString() }, { onConflict: "key" });
+    if (error) { showToast("⚠️ Couldn't change the setting — try again."); return; }
+    setRequireApproval(next);
+    showToast(next ? "New accounts now need approval ✓" : "New accounts are approved automatically ✓");
+  };
   const changeRole = (id, role) => { setMembers(m => m.map(mb => mb.id === id ? { ...mb, role } : mb)); showToast(`Role updated to ${role} ✓`); };
 
   return (
     <div>
+      {isAdmin && requireApproval !== null && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontWeight: 700 }}>🔐 New account approval</div>
+              <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 2 }}>
+                {requireApproval ? "ON — new accounts wait for an R4 or Admin to approve them." : "OFF — new accounts can use the hub right away."}
+              </div>
+            </div>
+            <button className={`btn btn-sm ${requireApproval ? "btn-secondary" : "btn-green"}`} onClick={toggleRequireApproval}>
+              {requireApproval ? "Turn off" : "Turn on"}
+            </button>
+          </div>
+        </div>
+      )}
       {pending.length > 0 && (
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontWeight: 700, marginBottom: 10, color: "var(--red)" }}>{t.pendingApprovals2} ({pending.length})</div>
