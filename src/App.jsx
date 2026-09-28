@@ -3615,8 +3615,8 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
           </div>
 
 
-      {/* Admin only: manually add a member sign-up, save teams */}
-      {isAdmin && (
+      {/* R4 + Admin: add a member sign-up, save teams */}
+      {(
         <div style={{ marginBottom: 14 }}>
           {!adminSignupOpen ? (
             <div className="row" style={{gap:8}}>
@@ -3734,7 +3734,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
             <col style={{ width: 18 }} />
             <col style={{ width: 38 }} />
             <col style={{ width: 80 }} />
-            {isAdmin && <col style={{ width: 24 }} />}
+            <col style={{ width: 24 }} />
           </colgroup>
           <thead>
             <tr>
@@ -3743,7 +3743,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
                   {label}{tableSort.col === col ? (tableSort.dir === "asc" ? "↑" : "↓") : ""}
                 </th>
               ))}
-              {isAdmin && <th></th>}
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -3783,9 +3783,9 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
                       ))}
                     </div>
                   </td>
-                  {isAdmin && <td style={{ textAlign: "center", overflow: "visible" }}>
+                  <td style={{ textAlign: "center", overflow: "visible" }}>
                     <button type="button" aria-label="Edit sign-up" style={{ background: "none", border: "none", padding: 0, fontSize: 13, cursor: "pointer" }} onClick={()=>setEditSignup({signup:s, type:tab})}>✏️</button>
-                  </td>}
+                  </td>
                 </tr>
               );
             })}
