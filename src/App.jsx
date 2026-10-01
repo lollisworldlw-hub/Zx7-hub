@@ -572,7 +572,14 @@ const timePrefLabel = (pref, offered = [], short = false) => {
   if (!list.length) return "—";
   return short ? list.map(x => x.replace(/:00$/, "")).join("/") : list.join(" / ");
 };
-// Spots per assignment: R4 setting, otherwise 2 (Floater 4)
+// Spots per assignment: R4 setting per team, otherwise 2 (Floater 4)
+// slotCaps = { teamA: { "Team 1": 3, ... }, teamB: { ... } }. An older flat { "Team 1": 3 } applies to both teams until changed.
+const teamSlotCaps = (slotCaps, teamKey) => {
+  const caps = slotCaps || {};
+  if (caps[teamKey] && typeof caps[teamKey] === "object") return caps[teamKey];
+  const { teamA, teamB, ...flat } = caps;
+  return flat;
+};
 const getSlotCapFor = (caps, slot) => Number(caps?.[slot]) > 0 ? Number(caps[slot]) : (slot === "Floater" ? 4 : 2);
 
 const formatPower = (val) => {
@@ -3348,13 +3355,15 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
   // Slot cap: set by R4 under "Spots per assignment" (default 2, Floater 4)
   const { config: stormCfg, save: saveStormCfg } = useStormConfig();
   const slotCaps = stormCfg?.[tab]?.slotCaps || {};
-  const getSlotCap = (slotName) => getSlotCapFor(slotCaps, slotName);
-  const [capsOpen, setCapsOpen] = useState(false);
+  const getSlotCap = (slotName, teamKey) => getSlotCapFor(teamSlotCaps(slotCaps, teamKey), slotName);
+  const [capsTeam, setCapsTeam] = useState(null); // "teamA" | "teamB" while the popup is open
   const [capsDraft, setCapsDraft] = useState({});
-  const openCaps = () => { setCapsDraft(Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl)]))); setCapsOpen(o => !o); };
+  const openCaps = (teamKey) => { setCapsDraft(Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl, teamKey)]))); setCapsTeam(teamKey); };
   const saveCaps = async () => {
     const clean = Object.fromEntries(Object.entries(capsDraft).map(([k, v]) => [k, Math.max(1, Math.min(20, parseInt(v, 10) || 1))]));
-    if (await saveStormCfg(tab, { slotCaps: clean })) { showToast("Spots per assignment saved ✓"); setCapsOpen(false); }
+    const full = (tk) => Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl, tk)])); // keeps the other team's current spots
+    const next = { teamA: capsTeam === "teamA" ? clean : full("teamA"), teamB: capsTeam === "teamB" ? clean : full("teamB") };
+    if (await saveStormCfg(tab, { slotCaps: next })) { showToast(`Team ${capsTeam === "teamA" ? "A" : "B"} spots saved ✓`); setCapsTeam(null); }
   };
   const countSlot = (teamKey, slotName) => {
     const members = getTeamMembers(histTeams?.[teamKey]);
@@ -3425,6 +3434,8 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           <span className={`badge ${subOver ? "badge-red" : "badge-gold"}`} style={{ fontSize: 11 }}>
             Subs: {subCount}/10{subOver ? " ⚠️" : ""}
           </span>
+          <button type="button" className="badge badge-blue" style={{ fontSize: 11, border: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit" }}
+            onClick={() => openCaps(teamKey)} title={`Spots per assignment for Team ${teamLabel}`}>👥 Spots</button>
         </div>
         <div style={{ overflowX: "auto", margin: "0 -4px" }}>
           <table className="data-table storm-assign">
@@ -3458,7 +3469,7 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
                   : avail === "cantMake" ? { txt: "✗", c: "var(--red)", tip: "Can't make" } : null;
                 const stripe = i % 2 === 0 ? "transparent" : "var(--surface2)";
                 const selectedSlot = sd.slot || m.slot || "";
-                const slotCap = selectedSlot ? getSlotCap(selectedSlot) : null;
+                const slotCap = selectedSlot ? getSlotCap(selectedSlot, teamKey) : null;
                 const slotCount = selectedSlot ? countSlot(teamKey, selectedSlot) : 0;
                 const slotFull = slotCap !== null && slotCount > slotCap;
                 const shortSlot = (sl) => sl === "Floater" ? "Flt" : sl.replace("Team ", "T");
@@ -3476,7 +3487,7 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
                         onChange={e => setSlot(uid, "slot", e.target.value)}>
                         <option value="">—</option>
                         {slots.map(sl => {
-                          const cap = getSlotCap(sl);
+                          const cap = getSlotCap(sl, teamKey);
                           const cnt = countSlot(teamKey, sl);
                           const full = sl !== selectedSlot && cnt >= cap;
                           return <option key={sl} value={sl} disabled={full}>{shortSlot(sl)} {cnt}/{cap}</option>;
@@ -3560,7 +3571,7 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
         ]);
       });
       const floaters = getPlayers(teamKey, "Floater");
-      Array.from({ length: Math.max(getSlotCap("Floater"), floaters.length) }, (_, i) => i).forEach(i => {
+      Array.from({ length: Math.max(getSlotCap("Floater", teamKey), floaters.length) }, (_, i) => i).forEach(i => {
         rows.push([{ v: `Floater ${i + 1}:`, s: { font: BOLD } }, { v: floaters[i] || "—" }, "", ""]);
       });
       const subs = getSubs(teamKey);
@@ -3619,30 +3630,33 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           {isAdmin && <button className="btn btn-sm btn-danger" onClick={onClear}>🗑️ Clear Week</button>}
         </div>
       </div>
-      <h3 style={{ fontWeight: 700, marginBottom: 12 }}>{tab === "canyon" ? "🏔️" : "🏜️"} Battle — {formatDate(view)}</h3>
-      <div className="card" style={{ marginBottom: 16 }}>
-        <button type="button" onClick={openCaps} style={{ width: "100%", background: "none", border: "none", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
-          <span style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>👥 Spots per assignment</span>
-          <span style={{ fontSize: 12, color: "var(--text-dim)", textAlign: "right" }}>{capsOpen ? "Close ▲" : slots.map(sl => `${sl === "Floater" ? "Flt" : sl.replace("Team ", "T")} ${getSlotCap(sl)}`).join(" · ")}</span>
-        </button>
-        {capsOpen && (
-          <div style={{ padding: "0 16px 14px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
-              {slots.map(sl => (
-                <label key={sl} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, fontWeight: 600, color: "var(--text-mid)" }}>
-                  {sl}
-                  <input className="form-input" type="number" min={1} max={20} inputMode="numeric" style={{ padding: "8px 10px" }}
-                    value={capsDraft[sl] ?? ""} onChange={e => setCapsDraft(d => ({ ...d, [sl]: e.target.value }))} />
-                </label>
-              ))}
+      <h3 style={{ fontWeight: 700, marginBottom: 16 }}>{tab === "canyon" ? "🏔️" : "🏜️"} Battle — {formatDate(view)}</h3>
+      {capsTeam && (
+        <div className="modal-overlay" onClick={() => setCapsTeam(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <div className="modal-title">👥 Team {capsTeam === "teamA" ? "A" : "B"} — Spots per assignment</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setCapsTeam(null)} aria-label="Close">✕</button>
             </div>
-            <div className="row" style={{ gap: 8, marginTop: 12 }}>
-              <button className="btn btn-sm btn-primary" onClick={saveCaps}>💾 Save spots</button>
-              <button className="btn btn-sm btn-ghost" onClick={() => setCapsOpen(false)}>Cancel</button>
+            <div className="modal-body">
+              <div className="form-hint" style={{ marginBottom: 10 }}>How many players each assignment holds for Team {capsTeam === "teamA" ? "A" : "B"} only.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
+                {slots.map(sl => (
+                  <label key={sl} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, fontWeight: 600, color: "var(--text-mid)" }}>
+                    {sl}
+                    <input className="form-input" type="number" min={1} max={20} inputMode="numeric" style={{ padding: "8px 10px" }}
+                      value={capsDraft[sl] ?? ""} onChange={e => setCapsDraft(d => ({ ...d, [sl]: e.target.value }))} />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setCapsTeam(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveCaps}>💾 Save spots</button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       {renderTeam("teamA", "A", "var(--gold)", sortA)}
       {renderTeam("teamB", "B", "var(--blue)", sortB)}
 
