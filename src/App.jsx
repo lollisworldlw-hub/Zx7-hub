@@ -890,6 +890,7 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .assign-card:hover { border-color: var(--gold); }
 .assign-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-pale); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
 .top-bar { box-shadow: var(--glow); }
+.update-banner { position: fixed; left: 12px; right: 12px; bottom: 72px; z-index: 150; background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; max-width: 520px; margin: 0 auto; }
 .install-card { background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; box-shadow: var(--glow); }
 @media (max-width: 420px) { .top-bar-name { display: none; } .top-bar { padding: 0 12px; } }
 
@@ -1329,6 +1330,10 @@ export default function App() {
           if (payload.eventType === "DELETE") setDsSignupsState(prev => prev.filter(s => !(String(s.userId) === String(payload.old.member_id) && s.week === payload.old.week_start)));
         }).subscribe(),
 
+      supabase.channel("battle-teams-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "battle_teams" }, () => refreshTeams())
+        .subscribe(),
+
       supabase.channel("trains-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "trains" }, (payload) => {
           if (payload.eventType === "INSERT") setTrainsState(prev => [...prev.filter(t => t.id !== payload.new.id), mapTrain(payload.new)].sort((a,b) => a.date.localeCompare(b.date)));
@@ -1378,15 +1383,30 @@ export default function App() {
     if (dsData) setDsSignupsState(dedupeLiveWeeks(dsData, "desert"));
   };
 
+  // ── Re-fetch saved storm teams so members see new assignments without refreshing.
+  // Only replaces state when something actually changed (so an R4's unsaved edits aren't disturbed).
+  const refreshTeams = async () => {
+    const { data } = await supabase.from("battle_teams").select("*");
+    if (!data) return;
+    const cs = {}; const ds = {};
+    data.forEach(t => {
+      const val = { timeA: t.time_a, timeB: t.time_b, ...(t.team_data || {}) };
+      if (t.type === "canyon") cs[t.battle_date] = val; else ds[t.battle_date] = val;
+    });
+    setCsTeamsState(prev => JSON.stringify(prev) === JSON.stringify(cs) ? prev : cs);
+    setDsTeamsState(prev => JSON.stringify(prev) === JSON.stringify(ds) ? prev : ds);
+  };
+
   useEffect(() => {
     let lastDay = serverNow().getUTCDay();
     const interval = setInterval(() => {
+      if (document.visibilityState === "visible") refreshTeams();
       const currentDay = serverNow().getUTCDay();
       if (currentDay === lastDay) return;
       lastDay = currentDay;
       refreshSignups();
     }, 60000);
-    const onVisible = () => { if (document.visibilityState === "visible") refreshSignups(); };
+    const onVisible = () => { if (document.visibilityState === "visible") { refreshSignups(); refreshTeams(); } };
     document.addEventListener("visibilitychange", onVisible);
     return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
@@ -1607,6 +1627,7 @@ export default function App() {
         </main>
         <BottomNav page={page} setPage={setPage} t={t} isR4={isR4} members={members} />
         {toast && <div className="toast">{toast}</div>}
+        <UpdateBanner />
         {viewMember && <MemberCard member={viewMember} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} allDsHistory={dsAllSignups} onClose={() => setViewMember(null)} />}
       </div>
     </StormConfigContext.Provider>
@@ -1740,6 +1761,64 @@ function AuthPage({ onLogin, members, setMembers, t }) {
     </div>
   );
 }
+// ─── AUTO UPDATE ──────────────────────────────────────────────────────────────
+// Every deploy writes /version.json. The app checks it every few minutes and whenever it's reopened.
+// When a new version is out: if the app was in the background it reloads straight away when reopened;
+// if someone is using it, a banner shows and it refreshes itself after a short countdown —
+// but never while they're typing or have a pop-up open.
+const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
+const UPDATE_CHECK_MS = 3 * 60 * 1000;
+const UPDATE_COUNTDOWN_S = 30;
+
+function UpdateBanner() {
+  const [ready, setReady] = useState(false);
+  const [secs, setSecs] = useState(UPDATE_COUNTDOWN_S);
+  const readyRef = useRef(false);
+
+  useEffect(() => {
+    if (APP_VERSION === "dev") return;
+    const check = async () => {
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const { version } = await res.json();
+        if (version && version !== APP_VERSION) { readyRef.current = true; setReady(true); }
+      } catch {}
+    };
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible") return;
+      await check();
+      if (readyRef.current) window.location.reload(); // coming back to the app — just load the new version
+    };
+    check();
+    const id = setInterval(check, UPDATE_CHECK_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const id = setInterval(() => {
+      const busy = !!document.querySelector(".modal-overlay") ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+      if (busy) { setSecs(UPDATE_COUNTDOWN_S); return; } // wait until they're done
+      setSecs(s => {
+        if (s <= 1) { window.location.reload(); return 0; }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [ready]);
+
+  if (!ready) return null;
+  return (
+    <div className="update-banner" role="status">
+      <span>🔄 Zx7 Hub was updated — refreshing in {secs}s</span>
+      <button className="btn btn-sm btn-primary" onClick={() => window.location.reload()}>Refresh now</button>
+    </div>
+  );
+}
+
 // ─── ADD TO HOME SCREEN BANNER ────────────────────────────────────────────────
 function InstallBanner() {
   const isStandalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
