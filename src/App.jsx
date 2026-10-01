@@ -897,6 +897,8 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .assign-card:hover { border-color: var(--gold); }
 .assign-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-pale); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
 .top-bar { box-shadow: var(--glow); }
+.team-sticky { position: sticky; top: 60px; z-index: 40; background: var(--bg); margin: 0 -20px 8px; padding: 8px 20px; }
+@media (min-width: 640px) { .team-sticky { margin: 0 -32px 8px; padding: 8px 32px; } }
 .update-banner { position: fixed; left: 12px; right: 12px; bottom: 72px; z-index: 150; background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; max-width: 520px; margin: 0 auto; }
 .install-card { background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; box-shadow: var(--glow); }
 @media (max-width: 420px) { .top-bar-name { display: none; } .top-bar { padding: 0 12px; } }
@@ -3356,6 +3358,9 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
   const { config: stormCfg, save: saveStormCfg } = useStormConfig();
   const slotCaps = stormCfg?.[tab]?.slotCaps || {};
   const getSlotCap = (slotName, teamKey) => getSlotCapFor(teamSlotCaps(slotCaps, teamKey), slotName);
+  const [mapOpen, setMapOpen] = useState(false);
+  const { plans: battlePlansCfg } = useStormConfig();
+  const battleMapSrc = battlePlansCfg?.[tab]?.map || (tab === "canyon" ? CS_MAP : DS_MAP);
   const [capsTeam, setCapsTeam] = useState(null); // "teamA" | "teamB" while the popup is open
   const [capsDraft, setCapsDraft] = useState({});
   const openCaps = (teamKey) => { setCapsDraft(Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl, teamKey)]))); setCapsTeam(teamKey); };
@@ -3422,12 +3427,14 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
 
     return (
       <div style={{ marginBottom: 24 }}>
+        {/* Sticky team header — pinned under the top bar while scrolling this team */}
+        <div className="team-sticky" style={{ borderBottom: `2px solid ${color}` }}>
         <div style={{ fontWeight: 700, marginBottom: 6, color, fontSize: 15 }}>
           Team {teamLabel} — {teamKey === "teamA" ? histTeams?.timeA : histTeams?.timeB} {t.serverTime}
           <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 400, color: "var(--text-dim)" }}>{members.length} members</span>
         </div>
         {/* Starter / Sub caps */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <span className={`badge ${starterOver ? "badge-red" : "badge-green"}`} style={{ fontSize: 11 }}>
             Starters: {starterCount}/20{starterOver ? " ⚠️" : ""}
           </span>
@@ -3436,6 +3443,9 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           </span>
           <button type="button" className="badge badge-blue" style={{ fontSize: 11, border: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit" }}
             onClick={() => openCaps(teamKey)} title={`Spots per assignment for Team ${teamLabel}`}>👥 Spots</button>
+          <button type="button" className="badge badge-blue" style={{ fontSize: 11, border: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit" }}
+            onClick={() => setMapOpen(true)} title="Battle map">🗺️ Map</button>
+        </div>
         </div>
         <div style={{ overflowX: "auto", margin: "0 -4px" }}>
           <table className="data-table storm-assign">
@@ -3631,6 +3641,14 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
         </div>
       </div>
       <h3 style={{ fontWeight: 700, marginBottom: 16 }}>{tab === "canyon" ? "🏔️" : "🏜️"} Battle — {formatDate(view)}</h3>
+      {mapOpen && (
+        <div className="modal-overlay" onClick={() => setMapOpen(false)} style={{ alignItems: "flex-start", paddingTop: 20 }}>
+          <div style={{ width: "100%", maxWidth: 700, position: "relative" }} onClick={e => e.stopPropagation()}>
+            <button onClick={() => setMapOpen(false)} aria-label="Close map" style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.6)", color: "white", border: "none", borderRadius: "50%", width: 32, height: 32, cursor: "pointer", fontSize: 16, zIndex: 10 }}>✕</button>
+            <img src={battleMapSrc} alt={`${tab === "canyon" ? "Canyon" : "Desert"} Storm map`} style={{ width: "100%", borderRadius: 12, display: "block" }} />
+          </div>
+        </div>
+      )}
       {capsTeam && (
         <div className="modal-overlay" onClick={() => setCapsTeam(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
