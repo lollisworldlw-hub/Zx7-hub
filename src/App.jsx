@@ -583,7 +583,17 @@ const teamSlotCaps = (slotCaps, teamKey) => {
   const { teamA, teamB, ...flat } = caps;
   return flat;
 };
-const getSlotCapFor = (caps, slot) => Number(caps?.[slot]) > 0 ? Number(caps[slot]) : (slot === "Floater" ? 4 : 2);
+// A saved 0 is a real value ("not used"), only missing/blank falls back to the default
+const getSlotCapFor = (caps, slot) => {
+  const v = caps?.[slot];
+  if (v !== undefined && v !== null && v !== "" && !isNaN(Number(v)) && Number(v) >= 0) return Number(v);
+  return slot === "Floater" ? 4 : 2;
+};
+// This week's battle plan saved on the team data → { same, a, b } (null = original built-in plan)
+const normalizeWeekPlan = (plan) => {
+  if (!plan || typeof plan.a !== "string") return null;
+  return { same: plan.same !== false, a: plan.a, b: typeof plan.b === "string" ? plan.b : plan.a };
+};
 
 const formatPower = (val) => {
   const num = parseFloat(val);
@@ -909,11 +919,20 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .assign-mini-view { color: var(--gold); font-weight: 600; flex-shrink: 0; }
 .assign-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-pale); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
 .top-bar { box-shadow: var(--glow); }
+.team-pills { display: flex; flex-wrap: nowrap; gap: 3px; align-items: center; white-space: nowrap; }
+.team-pills .badge { font-size: 10.5px; padding: 3px 6px; gap: 2px; flex-shrink: 0; }
+.team-pills button.badge { border: 1px solid var(--border); cursor: pointer; font-family: inherit; position: relative; }
+.team-pills .same-a { font-size: 7.5px; font-weight: 700; margin-left: 1px; vertical-align: super; line-height: 0; }
+@media (max-width: 380px) { .team-sticky { padding-left: 12px !important; padding-right: 12px !important; } }
+.spots-counter { margin-right: auto; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .team-sticky { position: sticky; top: 60px; z-index: 40; background: var(--bg); margin: 0 -20px 8px; padding: 8px 20px; }
 @media (min-width: 640px) { .team-sticky { margin: 0 -32px 8px; padding: 8px 32px; } }
 .update-banner { position: fixed; left: 12px; right: 12px; bottom: 72px; z-index: 150; background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; max-width: 520px; margin: 0 auto; }
 .install-card { background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; box-shadow: var(--glow); }
-@media (max-width: 420px) { .top-bar-name { display: none; } .top-bar { padding: 0 12px; } }
+.top-bar-user { gap: 4px; flex-shrink: 0; }
+.top-bar-logo { white-space: nowrap; min-width: 0; }
+@media (max-width: 420px) { .top-bar { padding: 0 12px; } }
+@media (max-width: 380px) { .top-bar-name { display: none; } .top-bar-logo span { font-size: 18px; letter-spacing: 1px; } }
 
 `;
 
@@ -1864,15 +1883,17 @@ function AuthPage({ onLogin, members, setMembers, t }) {
 // but never while they're typing or have a pop-up open.
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
 const UPDATE_CHECK_MS = 3 * 60 * 1000;
-const UPDATE_COUNTDOWN_S = 30;
+const UPDATE_IDLE_MS = 2 * 60 * 1000; // auto-refresh once nobody has touched the app for this long
 
 function UpdateBanner() {
   const [ready, setReady] = useState(false);
-  const [secs, setSecs] = useState(UPDATE_COUNTDOWN_S);
   const readyRef = useRef(false);
+  const lastActivity = useRef(Date.now());
 
   useEffect(() => {
     if (APP_VERSION === "dev") return;
+    const busy = () => !!document.querySelector(".modal-overlay") ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
     const check = async () => {
       try {
         const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
@@ -1881,36 +1902,35 @@ function UpdateBanner() {
         if (version && version !== APP_VERSION) { readyRef.current = true; setReady(true); }
       } catch {}
     };
+    // Coming back to the app/tab — load the new version straight away (unless a form is open)
     const onVisible = async () => {
       if (document.visibilityState !== "visible") return;
       await check();
-      if (readyRef.current) window.location.reload(); // coming back to the app — just load the new version
+      if (readyRef.current && !busy()) window.location.reload();
     };
+    // Remember the last time someone tapped, typed or scrolled
+    const touch = () => { lastActivity.current = Date.now(); };
+    const activity = ["pointerdown", "keydown", "scroll", "wheel", "touchstart"];
+    activity.forEach(ev => window.addEventListener(ev, touch, { passive: true }));
+    // Update waiting + nobody has touched the app for 2 minutes + no pop-up/form open → refresh
+    const idle = setInterval(() => {
+      if (readyRef.current && Date.now() - lastActivity.current >= UPDATE_IDLE_MS && !busy()) window.location.reload();
+    }, 30000);
     check();
     const id = setInterval(check, UPDATE_CHECK_MS);
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+    return () => {
+      clearInterval(id); clearInterval(idle);
+      activity.forEach(ev => window.removeEventListener(ev, touch));
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    const id = setInterval(() => {
-      const busy = !!document.querySelector(".modal-overlay") ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
-      if (busy) { setSecs(UPDATE_COUNTDOWN_S); return; } // wait until they're done
-      setSecs(s => {
-        if (s <= 1) { window.location.reload(); return 0; }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [ready]);
 
   if (!ready) return null;
   return (
     <div className="update-banner" role="status">
-      <span>🔄 Zx7 Hub was updated — refreshing in {secs}s</span>
-      <button className="btn btn-sm btn-primary" onClick={() => window.location.reload()}>Refresh now</button>
+      <span>🔄 Zx7 Hub was updated</span>
+      <button className="btn btn-sm btn-primary" onClick={() => window.location.reload()}>Update</button>
     </div>
   );
 }
@@ -1973,7 +1993,50 @@ function InstallBanner() {
 }
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────────────
+const isStandaloneApp = () => typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+
+function GetAppModal({ onClose }) {
+  const ua = navigator.userAgent;
+  const isIOS = /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  const [canPrompt, setCanPrompt] = useState(() => !!window.__zx7InstallPrompt);
+  const install = async () => {
+    const ev = window.__zx7InstallPrompt;
+    if (!ev) return;
+    ev.prompt();
+    await ev.userChoice.catch(() => null);
+    window.__zx7InstallPrompt = null; setCanPrompt(false); onClose();
+  };
+  const steps = isIOS
+    ? [<>Tap the <strong>Share</strong> button (□↑) in Safari</>, <>Scroll down and tap <strong>Add to Home Screen</strong></>, <>Tap <strong>Add</strong></>]
+    : [<>Tap Chrome's <strong>⋮</strong> menu (top right)</>, <>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong></>, <>Tap <strong>Install</strong></>];
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
+        <div className="modal-header">
+          <div className="modal-title">📲 Get the Zx7 Hub app</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="modal-body">
+          {canPrompt ? (
+            <button className="btn btn-primary btn-full" onClick={install}>📲 Install Zx7 Hub</button>
+          ) : (<>
+            <ol style={{ fontSize: 14, color: "var(--text-mid)", margin: "0 0 0 18px", lineHeight: 1.8 }}>
+              {steps.map((st, i) => <li key={i}>{st}</li>)}
+            </ol>
+            {!isIOS && <div className="form-hint" style={{ marginTop: 10 }}>If you uninstalled the app recently, Chrome can take a while before it offers Install again — the ⋮ menu option still works.</div>}
+          </>)}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TopBar({ user, t, onLogout, setPage, darkMode, setDarkMode }) {
+  const [getApp, setGetApp] = useState(false);
+  const showGetApp = !isStandaloneApp();
   return (
     <div className="top-bar">
       <button className="top-bar-logo" onClick={() => setPage("home")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1981,15 +2044,17 @@ function TopBar({ user, t, onLogout, setPage, darkMode, setDarkMode }) {
         <span>Zx7 Hub</span>
       </button>
       <div className="top-bar-user">
-        <button onClick={() => setDarkMode(d => !d)} style={{ background: "none", border: "none", cursor: "pointer", padding: "6px", fontSize: 18, lineHeight: 1, color: "var(--text-mid)" }} title={darkMode ? "Light mode" : "Dark mode"}>
+        <button onClick={() => setDarkMode(d => !d)} style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 4px", fontSize: 18, lineHeight: 1, color: "var(--text-mid)" }} title={darkMode ? "Light mode" : "Dark mode"}>
           {darkMode ? "☀️" : "🌙"}
         </button>
         <button onClick={() => setPage("profile")} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "4px 6px", borderRadius: 8 }} title={t.profile}>
           <span className="top-bar-name" style={{ fontSize: 13, color: "var(--gold)", textDecoration: "underline", fontWeight: 600 }}>{user.username}</span>
           <div className="avatar">{user.username[0].toUpperCase()}</div>
         </button>
-        <button className="btn btn-ghost btn-sm" onClick={onLogout} style={{ padding: "6px 10px", fontSize: 12 }}>{t.logout}</button>
+        {showGetApp && <button onClick={() => setGetApp(true)} title="Get the app" aria-label="Get the app" style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 4px", fontSize: 18, lineHeight: 1 }}>📲</button>}
+        <button className="btn btn-ghost btn-sm" onClick={onLogout} style={{ padding: "6px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{t.logout}</button>
       </div>
+      {getApp && <GetAppModal onClose={() => setGetApp(false)} />}
     </div>
   );
 }
@@ -2788,8 +2853,8 @@ function BattlePlansPage({ user, csTeams, dsTeams, t, stormSettings, isR4, battl
         {showCanyon && <button className={`tab ${tab === "canyon" ? "active" : ""}`} onClick={() => setTab("canyon")}>🏔️ {t.canyonStorm}{!canyonActive && isR4 && <span style={{ fontSize: 10, marginLeft: 5, opacity: 0.6 }}>(off-season)</span>}</button>}
         <button className={`tab ${tab === "desert" ? "active" : ""}`} onClick={() => setTab("desert")}>🏜️ {t.desertStorm}</button>
       </div>
-      {tab === "canyon" && showCanyon && <BattlePlanView key="canyon" data={csData} weekKey={csWeek} type="canyon" user={user} mapSrc={battlePlans?.canyon?.map || CS_MAP} mapAlt="Canyon Storm map" plan={CS_PLAN} notes={CS_NOTES} customPlan={normalizePlan(battlePlans?.canyon)} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
-      {tab === "desert" && <BattlePlanView key="desert" data={dsData} weekKey={dsWeek} type="desert" user={user} mapSrc={battlePlans?.desert?.map || DS_MAP} mapAlt="Desert Storm map" plan={DS_PLAN} notes={DS_NOTES} customPlan={normalizePlan(battlePlans?.desert)} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
+      {tab === "canyon" && showCanyon && <BattlePlanView key="canyon" data={csData} weekKey={csWeek} type="canyon" user={user} mapSrc={battlePlans?.canyon?.map || CS_MAP} mapAlt="Canyon Storm map" plan={CS_PLAN} notes={CS_NOTES} customPlan={normalizeWeekPlan(csData?.plan)} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
+      {tab === "desert" && <BattlePlanView key="desert" data={dsData} weekKey={dsWeek} type="desert" user={user} mapSrc={battlePlans?.desert?.map || DS_MAP} mapAlt="Desert Storm map" plan={DS_PLAN} notes={DS_NOTES} customPlan={normalizeWeekPlan(dsData?.plan)} isR4={isR4} saveBattlePlan={saveBattlePlan} showToast={showToast} t={t} />}
     </div>
   );
 }
@@ -2964,14 +3029,20 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
         customPlan.same ? (
           <PlanText text={customPlan.a} />
         ) : (
-          ["A", "B"].map(team => (
-            <div key={team} style={{ marginBottom: 20 }}>
-              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10, color: team === "A" ? "var(--gold)" : "var(--blue)" }}>
-                ⚔️ Team {team} Battle Plan{mine?.team === team ? <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-dim)", marginLeft: 8 }}>⭐ your team</span> : null}
+          ["A", "B"].map(team => {
+            const col = team === "A" ? "var(--purple)" : "var(--blue)";
+            const time = team === "A" ? data?.timeA : data?.timeB;
+            return (
+              <div key={team} className="card" style={{ marginBottom: 16 }}>
+                <div style={{ background: col, color: "#fff", padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>⚔️ Team {team} plan</span>
+                  {time && <span style={{ fontSize: 12, opacity: 0.9 }}>{time} server</span>}
+                  {mine?.team === team && <span style={{ marginLeft: "auto", background: "rgba(255,255,255,0.25)", borderRadius: 999, padding: "2px 9px", fontSize: 11, fontWeight: 700 }}>⭐ Your team</span>}
+                </div>
+                <div className="card-body"><PlanText text={team === "A" ? customPlan.a : customPlan.b} /></div>
               </div>
-              <PlanText text={team === "A" ? customPlan.a : customPlan.b} />
-            </div>
-          ))
+            );
+          })
         )
       ) : (<>
       {/* Phase-by-phase plan */}
@@ -3014,10 +3085,7 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
   );
 }
 
-// ─── BATTLE PLAN EDITOR (R4 / Admin) ─────────────────────────────────────────
-// One editor for the battle plan: opened from ⚙️ Storm Settings in Management (the Plans tab is view-only).
-// Saves to the existing app_settings key battle_plan_<storm> as { same, a, b, map }.
-
+// ─── BATTLE MAP PICTURE (Zx7: optional custom map, saved in app_settings battle_plan_<storm>.map) ───
 // Shrink an uploaded image so it can be stored in the database
 const resizeImageToDataUrl = (file, maxSize = 1400) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -3038,82 +3106,32 @@ const resizeImageToDataUrl = (file, maxSize = 1400) => new Promise((resolve, rej
   reader.readAsDataURL(file);
 });
 
-function BattlePlanEditor({ type, showToast, onDone, inModal }) {
+function BattleMapPicker({ type, showToast }) {
   const { plans, savePlan } = useStormConfig();
   const stored = plans?.[type] || null;
   const defaultMap = type === "canyon" ? CS_MAP : DS_MAP;
-  const defaultText = type === "canyon" ? planToText(CS_PLAN, CS_NOTES) : planToText(DS_PLAN, DS_NOTES);
-  const [plan, setPlan] = useState(() => {
-    const p = normalizePlan(stored);
-    return { same: p ? p.same : true, a: p ? p.a : defaultText, b: p ? p.b : defaultText };
-  });
-  const [map, setMap] = useState(stored?.map || null);
-  const [saving, setSaving] = useState(false);
-  const [mapError, setMapError] = useState("");
-  const isCustom = !!normalizePlan(stored);
-
-  const handleMap = async (e) => {
+  const [busy, setBusy] = useState(false);
+  const setMap = async (map) => {
+    setBusy(true);
+    const ok = await savePlan(type, map ? { ...(stored || {}), map } : (stored && Object.keys(stored).some(k => k !== "map") ? { ...stored, map: null } : null));
+    setBusy(false);
+    if (ok) showToast(map ? "Battle map updated ✓" : "Using the original map");
+  };
+  const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setMapError("");
-    try { setMap(await resizeImageToDataUrl(file)); }
-    catch { setMapError("Couldn't read that image — try a JPG or PNG."); }
+    try { await setMap(await resizeImageToDataUrl(file)); }
+    catch { showToast("Couldn't read that image — try a JPG or PNG."); }
   };
-
-  const save = async () => {
-    setSaving(true);
-    const next = plan.same ? { same: true, a: plan.a, b: plan.a } : { same: false, a: plan.a, b: plan.b };
-    const ok = await savePlan(type, { ...next, map: map || null });
-    setSaving(false);
-    if (ok) { showToast("Battle plan saved ✓ — members see it now"); onDone && onDone(); }
-  };
-  const resetPlan = async () => {
-    if (!window.confirm("Go back to the original built-in battle plan?")) return;
-    setSaving(true);
-    const ok = await savePlan(type, map ? { map } : null); // keeps a custom map picture
-    setSaving(false);
-    if (ok) { showToast("Battle plan reset"); onDone && onDone(); }
-  };
-  const taStyle = { fontFamily: "inherit", fontSize: 13, lineHeight: 1.5, resize: "vertical" };
-
   return (
     <div>
-      {(
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card-header"><div className="card-title">🗺️ Battle Map</div></div>
-          <div className="card-body">
-            <img src={map || defaultMap} alt="Battle map" style={{ width: "100%", borderRadius: 10, border: "1px solid var(--border)", display: "block", marginBottom: 10 }} />
-            <div className="row wrap" style={{ gap: 8 }}>
-              <label className="btn btn-sm btn-secondary" style={{ cursor: "pointer" }}>
-                📷 Change map image
-                <input type="file" accept="image/*" onChange={handleMap} style={{ display: "none" }} />
-              </label>
-              {map && <button className="btn btn-sm btn-ghost" onClick={() => setMap(null)}>Use default map</button>}
-            </div>
-            {mapError && <div className="form-hint" style={{ color: "var(--red)" }}>{mapError}</div>}
-          </div>
-        </div>
-      )}
-
-      <label className="row" style={{ gap: 8, cursor: "pointer", margin: "6px 0 8px", fontSize: 14, fontWeight: 600 }}>
-        <input type="checkbox" checked={plan.same} onChange={e => setPlan(p => ({ ...p, same: e.target.checked, b: e.target.checked ? p.b : (p.b || p.a) }))} style={{ width: 18, height: 18, accentColor: "var(--gold)" }} />
-        A &amp; B are the same
-      </label>
-      <div className="form-hint" style={{ marginBottom: 8 }}>Start a line with <strong>#</strong> for a heading and <strong>-</strong> for a bullet.</div>
-      <div className="form-group">
-        <label className="form-label">{plan.same ? "Battle plan (Team A & B)" : "Team A battle plan"}</label>
-        <textarea className="form-input" rows={10} value={plan.a} onChange={e => setPlan(p => ({ ...p, a: e.target.value }))} style={taStyle} />
-      </div>
-      {!plan.same && (
-        <div className="form-group">
-          <label className="form-label">Team B battle plan</label>
-          <textarea className="form-input" rows={10} value={plan.b} onChange={e => setPlan(p => ({ ...p, b: e.target.value }))} style={taStyle} />
-        </div>
-      )}
+      <img src={stored?.map || defaultMap} alt="Battle map" style={{ width: "100%", maxHeight: 170, objectFit: "contain", background: "#0b0d12", borderRadius: 10, display: "block", marginBottom: 8 }} />
       <div className="row wrap" style={{ gap: 8 }}>
-        <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? "Saving..." : "💾 Save plan"}</button>
-        {onDone && !inModal && <button className="btn btn-secondary btn-sm" onClick={onDone} disabled={saving}>Cancel</button>}
-        {isCustom && <button className="btn btn-ghost btn-sm" style={{ marginLeft: "auto" }} onClick={resetPlan} disabled={saving}>↺ Reset to original</button>}
+        <label className="btn btn-sm btn-secondary" style={{ cursor: busy ? "default" : "pointer" }}>
+          📷 Change map image
+          <input type="file" accept="image/*" onChange={onFile} disabled={busy} style={{ display: "none" }} />
+        </label>
+        {stored?.map && <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setMap(null)}>Use original map</button>}
       </div>
     </div>
   );
@@ -3443,7 +3461,7 @@ function EditSignupModal({ signup, type, memberName, onClose, onSave, t }) {
   );
 }
 
-function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, getName, onBack, onClear, onSave, onRemove, signups }) {
+function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, getName, onBack, onClear, onSave, onRemove, onPatchWeek, signups }) {
   const [weekSlotData, setWeekSlotData] = useState(histTeams?.slotData || {});
   const [weekAttendance, setWeekAttendance] = useState(histTeams?.attendance || {});
   const [nameColWidth, setNameColWidth] = useState(100);
@@ -3472,20 +3490,45 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
   };
 
   // Slot cap: set by R4 under "Spots per assignment" (default 2, Floater 4)
-  const { config: stormCfg, save: saveStormCfg } = useStormConfig();
-  const slotCaps = stormCfg?.[tab]?.slotCaps || {};
+  // Spots + plan are saved on THIS battle week's team data, so every new week starts on the defaults
+  const slotCaps = histTeams?.slotCaps || {};
   const getSlotCap = (slotName, teamKey) => getSlotCapFor(teamSlotCaps(slotCaps, teamKey), slotName);
   const [mapOpen, setMapOpen] = useState(false);
+  // ── Battle plan for this week (📝 Plan) ──
+  const weekPlan = normalizeWeekPlan(histTeams?.plan);
+  const originalPlanText = tab === "canyon" ? planToText(CS_PLAN, CS_NOTES) : planToText(DS_PLAN, DS_NOTES);
+  const [planTeam, setPlanTeam] = useState(null); // "A" | "B" while the popup is open
+  const [planText, setPlanText] = useState("");
+  const [planSame, setPlanSame] = useState(true);
+  const [planMapBig, setPlanMapBig] = useState(false);
+  const openPlan = (team) => {
+    const cur = weekPlan || { same: true, a: originalPlanText, b: originalPlanText };
+    setPlanSame(cur.same);
+    setPlanText(team === "A" ? cur.a : (cur.same ? cur.a : cur.b));
+    setPlanMapBig(false);
+    setPlanTeam(team);
+  };
+  const savePlan = async () => {
+    const cur = weekPlan || { same: true, a: originalPlanText, b: originalPlanText };
+    let next;
+    if (planTeam === "A") next = cur.same ? { same: true, a: planText, b: planText } : { same: false, a: planText, b: cur.b };
+    else next = planSame ? { same: true, a: cur.a, b: cur.a } : { same: false, a: cur.a, b: planText };
+    if (await onPatchWeek({ plan: next })) { showToast(`Team ${planTeam} plan saved for this week ✓`); setPlanTeam(null); }
+  };
+  const resetPlan = async () => {
+    if (!window.confirm("Reset this week's battle plan to the original for BOTH teams?")) return;
+    if (await onPatchWeek({ plan: null })) { showToast("Plan reset to the original for this week"); setPlanTeam(null); }
+  };
   const { plans: battlePlansCfg } = useStormConfig();
   const battleMapSrc = battlePlansCfg?.[tab]?.map || (tab === "canyon" ? CS_MAP : DS_MAP);
   const [capsTeam, setCapsTeam] = useState(null); // "teamA" | "teamB" while the popup is open
   const [capsDraft, setCapsDraft] = useState({});
   const openCaps = (teamKey) => { setCapsDraft(Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl, teamKey)]))); setCapsTeam(teamKey); };
   const saveCaps = async () => {
-    const clean = Object.fromEntries(Object.entries(capsDraft).map(([k, v]) => [k, Math.max(1, Math.min(20, parseInt(v, 10) || 1))]));
+    const clean = Object.fromEntries(Object.entries(capsDraft).map(([k, v]) => { const n = parseInt(v, 10); return [k, Math.max(0, Math.min(20, isNaN(n) ? 0 : n))]; }));
     const full = (tk) => Object.fromEntries(slots.map(sl => [sl, getSlotCap(sl, tk)])); // keeps the other team's current spots
     const next = { teamA: capsTeam === "teamA" ? clean : full("teamA"), teamB: capsTeam === "teamB" ? clean : full("teamB") };
-    if (await saveStormCfg(tab, { slotCaps: next })) { showToast(`Team ${capsTeam === "teamA" ? "A" : "B"} spots saved ✓`); setCapsTeam(null); }
+    if (await onPatchWeek({ slotCaps: next })) { showToast(`Team ${capsTeam === "teamA" ? "A" : "B"} spots saved ✓`); setCapsTeam(null); }
   };
   const countSlot = (teamKey, slotName) => {
     const members = getTeamMembers(histTeams?.[teamKey]);
@@ -3550,18 +3593,16 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           Team {teamLabel} — {teamKey === "teamA" ? histTeams?.timeA : histTeams?.timeB} {t.serverTime}
           <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 400, color: "var(--text-dim)" }}>{members.length} members</span>
         </div>
-        {/* Starter / Sub caps */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <span className={`badge ${starterOver ? "badge-red" : "badge-green"}`} style={{ fontSize: 11 }}>
-            Starters: {starterCount}/20{starterOver ? " ⚠️" : ""}
-          </span>
-          <span className={`badge ${subOver ? "badge-red" : "badge-gold"}`} style={{ fontSize: 11 }}>
-            Subs: {subCount}/10{subOver ? " ⚠️" : ""}
-          </span>
-          <button type="button" className="badge badge-blue" style={{ fontSize: 11, border: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit" }}
-            onClick={() => openCaps(teamKey)} title={`Spots per assignment for Team ${teamLabel}`}>👥 Spots</button>
-          <button type="button" className="badge badge-blue" style={{ fontSize: 11, border: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit" }}
-            onClick={() => setMapOpen(true)} title="Battle map">🗺️ Map</button>
+        {/* Starters · Subs · Spots · Map · Plan — always one row */}
+        <div className="team-pills">
+          <span className={`badge ${starterOver ? "badge-red" : "badge-green"}`}>Starters {starterCount}/20{starterOver ? " ⚠️" : ""}</span>
+          <span className={`badge ${subOver ? "badge-red" : "badge-gold"}`}>Subs {subCount}/10{subOver ? " ⚠️" : ""}</span>
+          <button type="button" className="badge badge-blue" onClick={() => openCaps(teamKey)} title={`Spots per assignment for Team ${teamLabel}`}>👥 Spots</button>
+          <button type="button" className="badge badge-blue" onClick={() => setMapOpen(true)} title="Battle map">🗺️ Map</button>
+          <button type="button" className="badge badge-blue" onClick={() => openPlan(teamLabel)}
+            title={teamLabel === "B" && (!weekPlan || weekPlan.same) ? "Team B uses Team A's plan — tap to change" : `Team ${teamLabel} battle plan`}>
+            📝 Plan{teamLabel === "B" && (!weekPlan || weekPlan.same) ? <sup className="same-a">=A</sup> : null}
+          </button>
         </div>
         </div>
         <div style={{ overflowX: "auto", margin: "0 -4px" }}>
@@ -3616,6 +3657,8 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
                         {slots.map(sl => {
                           const cap = getSlotCap(sl, teamKey);
                           const cnt = countSlot(teamKey, sl);
+                          if (cap === 0 && sl !== selectedSlot && cnt === 0) return null; // assignment not used this week
+                          if (cap === 0) return <option key={sl} value={sl} disabled={sl !== selectedSlot}>{shortSlot(sl)} (off)</option>;
                           const full = sl !== selectedSlot && cnt >= cap;
                           return <option key={sl} value={sl} disabled={full}>{shortSlot(sl)} {cnt}/{cap}</option>;
                         })}
@@ -3690,6 +3733,7 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
       rows.push([{ v: `⏰ ${time || "TBD"} server time`, s: { font: BOLD } }, "", "", ""]);
       teamSlots.forEach(slot => {
         const p = getPlayers(teamKey, slot);
+        if (getSlotCap(slot, teamKey) === 0 && p.length === 0) return; // not used this week
         rows.push([
           { v: `${slot}:`, s: { font: BOLD } },
           { v: p[0] || "—" },
@@ -3766,6 +3810,42 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           </div>
         </div>
       )}
+      {planTeam && (
+        <div className="modal-overlay" onClick={() => setPlanTeam(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">📝 {tab === "canyon" ? "Canyon" : "Desert"} — Team {planTeam} plan</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPlanTeam(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="modal-body">
+              <img src={battleMapSrc} alt={`${tab === "canyon" ? "Canyon" : "Desert"} Storm map`} onClick={() => setPlanMapBig(b => !b)}
+                style={{ width: "100%", maxHeight: planMapBig ? "none" : 170, objectFit: "contain", background: "#0b0d12", borderRadius: 10, display: "block", cursor: "pointer", marginBottom: 12 }} />
+              {planTeam === "A" ? (<>
+                <div className="form-hint" style={{ marginBottom: 6 }}>Start a line with <strong>#</strong> for a heading and <strong>-</strong> for a bullet.</div>
+                {(!weekPlan || weekPlan.same) && <div className="form-hint" style={{ marginBottom: 6, color: "var(--gold)" }}>Team B is set to "Same as A", so this plan is shown to everyone.</div>}
+                <textarea className="form-input" rows={12} value={planText} onChange={e => setPlanText(e.target.value)} style={{ fontFamily: "inherit", fontSize: 13, lineHeight: 1.5, resize: "vertical" }} />
+                {weekPlan && <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8, paddingLeft: 0 }} onClick={resetPlan}>↺ Reset to original</button>}
+              </>) : (<>
+                <label className="row" style={{ gap: 8, cursor: "pointer", marginBottom: 10, fontSize: 14, fontWeight: 600 }}>
+                  <input type="checkbox" checked={planSame} style={{ width: 18, height: 18, accentColor: "var(--gold)" }}
+                    onChange={e => { const same = e.target.checked; setPlanSame(same); if (!same && !(weekPlan && !weekPlan.same)) setPlanText((weekPlan || {}).a ?? originalPlanText); }} />
+                  Same as A
+                </label>
+                {planSame ? (
+                  <div className="form-hint" style={{ background: "var(--surface2)", borderRadius: 8, padding: "10px 12px" }}>Team B uses Team A's plan. Members see one plan for everyone on the Plans tab.</div>
+                ) : (<>
+                  <div className="form-hint" style={{ marginBottom: 6 }}>Start a line with <strong>#</strong> for a heading and <strong>-</strong> for a bullet.</div>
+                  <textarea className="form-input" rows={12} value={planText} onChange={e => setPlanText(e.target.value)} style={{ fontFamily: "inherit", fontSize: 13, lineHeight: 1.5, resize: "vertical" }} />
+                </>)}
+              </>)}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setPlanTeam(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={savePlan}>💾 Save plan</button>
+            </div>
+          </div>
+        </div>
+      )}
       {capsTeam && (
         <div className="modal-overlay" onClick={() => setCapsTeam(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
@@ -3774,20 +3854,29 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
               <button className="btn btn-ghost btn-sm" onClick={() => setCapsTeam(null)} aria-label="Close">✕</button>
             </div>
             <div className="modal-body">
-              <div className="form-hint" style={{ marginBottom: 10 }}>How many players each assignment holds for Team {capsTeam === "teamA" ? "A" : "B"} only.</div>
+              <div className="form-hint" style={{ marginBottom: 10 }}>How many players each assignment holds for Team {capsTeam === "teamA" ? "A" : "B"} only. Set 0 to hide an assignment you're not using.</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
                 {slots.map(sl => (
                   <label key={sl} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, fontWeight: 600, color: "var(--text-mid)" }}>
                     {sl}
-                    <input className="form-input" type="number" min={1} max={20} inputMode="numeric" style={{ padding: "8px 10px" }}
+                    <input className="form-input" type="number" min={0} max={20} inputMode="numeric" style={{ padding: "8px 10px" }}
                       value={capsDraft[sl] ?? ""} onChange={e => setCapsDraft(d => ({ ...d, [sl]: e.target.value }))} />
                   </label>
                 ))}
               </div>
             </div>
-            <div className="modal-footer">
+            <div className="modal-footer" style={{ alignItems: "center", flexWrap: "nowrap" }}>
+              {(() => {
+                const total = Object.values(capsDraft).reduce((n, v) => n + (parseInt(v, 10) || 0), 0);
+                const ok = total === 20;
+                return (
+                  <span className="spots-counter" style={{ color: ok ? "var(--green)" : total > 20 ? "var(--red)" : "var(--text-mid)" }}>
+                    {ok ? "20/20 ✓" : total < 20 ? `${total}/20 · ${20 - total} more` : `${total}/20 · ${total - 20} too many`}
+                  </span>
+                );
+              })()}
               <button className="btn btn-secondary" onClick={() => setCapsTeam(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={saveCaps}>💾 Save spots</button>
+              <button className="btn btn-primary" onClick={saveCaps} style={{ whiteSpace: "nowrap" }}>💾 Save</button>
             </div>
           </div>
         </div>
@@ -3979,11 +4068,12 @@ function StormSettingsModal({ type, showToast, onClose, isAdmin, seasonActive, o
             <div className="divider" style={{ margin: "18px 0" }} />
           </>}
 
-          <div style={sectionTitle}>📝 Battle plan</div>
-          <BattlePlanEditor type={type} showToast={showToast} onDone={onClose} inModal />
+          <div style={sectionTitle}>🗺️ Battle map picture</div>
+          <div className="form-hint" style={{ marginBottom: 8 }}>Battle plans are set per week — use 📝 Plan on each team in the week's assignments.</div>
+          <BattleMapPicker type={type} showToast={showToast} />
         </div>
         <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          <button className="btn btn-primary" onClick={onClose}>Done</button>
         </div>
       </div>
     </div>
@@ -4215,6 +4305,8 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
       waitlist,
       unassigned: [...unassignedMembers, ...notSetMembers],
       slotData: existing.slotData || {},
+      ...(existing.slotCaps ? { slotCaps: existing.slotCaps } : {}),
+      ...(existing.plan ? { plan: existing.plan } : {}),
     };
     if (tab === "canyon") setCsTeams(prev => ({ ...prev, [weekKey]: teamData }));
     else setDsTeams(prev => ({ ...prev, [weekKey]: teamData }));
@@ -4297,6 +4389,12 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
           else setDsTeams(prev => ({ ...prev, [view]: empty }));
           await supabase.from("battle_teams").delete().eq("type", tab==="canyon"?"canyon":"desert").eq("battle_date", view);
           setView("current"); showToast("Week cleared.");
+        }}
+        onPatchWeek={async (patch) => {
+          const updated = { ...(histTeams || {}), ...patch };
+          if (tab === "canyon") setCsTeams(prev => ({ ...prev, [view]: updated }));
+          else setDsTeams(prev => ({ ...prev, [view]: updated }));
+          return true;
         }}
         onSave={(slotData, attendance) => {
           const updated = { ...histTeams, slotData, attendance };
