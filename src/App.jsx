@@ -554,6 +554,9 @@ const DEFAULT_STORM_CONFIG = {
 };
 const StormConfigContext = React.createContext({ config: DEFAULT_STORM_CONFIG, save: async () => false, plans: {}, savePlan: async () => false });
 const useStormConfig = () => React.useContext(StormConfigContext);
+// Buddy / profession actions shared by Home, Profile, Management → Buddy and the member pop-up
+const BuddyActionsContext = React.createContext({ unpairBuddy: async () => false, changeProfession: async () => false, isR4: false });
+const useBuddyActions = () => React.useContext(BuddyActionsContext);
 const sortTimes = (arr) => [...new Set(arr)].sort();
 const LEGACY_TIME = { time12: "12:00", time18: "18:00", time23: "23:00" };
 // A member's time preference → list of "HH:MM" they can make. "either"/blank = every offered time.
@@ -895,6 +898,15 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .train-card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--green); border-radius: 12px; padding: 12px 16px; }
 .assign-card { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 14px 18px; display: flex; align-items: center; gap: 14px; cursor: pointer; margin-bottom: 10px; }
 .assign-card:hover { border-color: var(--gold); }
+.assign-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.assign-mini { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.assign-mini:hover { border-color: var(--gold); }
+.assign-mini-l1 { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--text-dim); }
+.assign-mini-l2 { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assign-mini-role { font-size: 11px; font-weight: 400; color: var(--text-dim); }
+.assign-mini-l3 { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 11px; color: var(--text-mid); white-space: nowrap; }
+.assign-mini-l3 > span:first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.assign-mini-view { color: var(--gold); font-weight: 600; flex-shrink: 0; }
 .assign-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-pale); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
 .top-bar { box-shadow: var(--glow); }
 .team-sticky { position: sticky; top: 60px; z-index: 40; background: var(--bg); margin: 0 -20px 8px; padding: 8px 20px; }
@@ -1063,8 +1075,12 @@ function DSGrowthChart({ user, dsSignups }) {
 
 
 // ─── MEMBER PROFILE MODAL ─────────────────────────────────────────────────────
-function MemberCard({ member, members, csTeams, dsTeams, csSignups, dsSignups, allDsHistory, onClose }) {
+function MemberCard({ member: memberProp, members, csTeams, dsTeams, csSignups, dsSignups, allDsHistory, onClose }) {
   const [showGrowth, setShowGrowth] = useState(false);
+  const [profOpen, setProfOpen] = useState(false);
+  const { isR4 } = useBuddyActions();
+  // Always read the live member so profession / buddy changes show immediately
+  const member = (members || []).find(m => String(m.id) === String(memberProp?.id)) || memberProp;
   if (!member) return null;
   const stats = computeStormStats(member.id, csTeams || {}, dsTeams || {}, csSignups || [], dsSignups || []);
   const pctColor = stats.pct == null ? "var(--text-dim)" : stats.pct >= 80 ? "var(--green)" : stats.pct >= 50 ? "var(--gold)" : "var(--red)";
@@ -1094,7 +1110,13 @@ function MemberCard({ member, members, csTeams, dsTeams, csSignups, dsSignups, a
           </div>
           {(() => {
             const buddy = member.buddy ? (members || []).find(b => String(b.id) === String(member.buddy)) : null;
-            return buddy ? <div style={{ background: "var(--bg)", borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 13 }}>🤝 Buddy: <strong>{buddy.username}</strong></div> : null;
+            if (!buddy && !isR4) return null;
+            return (
+              <div style={{ background: "var(--bg)", borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>🤝 {buddy ? <>Buddy: <strong>{buddy.username}</strong></> : <span style={{ color: "var(--text-dim)" }}>No buddy</span>}</span>
+                {isR4 && <button className="btn btn-sm btn-secondary" style={{ padding: "3px 8px", fontSize: 11, flexShrink: 0 }} onClick={() => setProfOpen(true)}>Profession / buddy</button>}
+              </div>
+            );
           })()}
           {stats.signedUp > 0 ? (
             <div style={{ background: "var(--bg)", borderRadius: 10, padding: "12px 14px" }}>
@@ -1119,6 +1141,7 @@ function MemberCard({ member, members, csTeams, dsTeams, csSignups, dsSignups, a
         </div>
       </div>
     </div>
+    {profOpen && <ProfessionBuddyModal member={member} members={members} onClose={() => setProfOpen(false)} />}
     {showGrowth && (
       <div className="modal-overlay" onClick={()=>setShowGrowth(false)} style={{zIndex:400}}>
         <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:520,padding:0,borderRadius:20,overflow:"hidden",maxHeight:"90vh",overflowY:"auto"}}>
@@ -1483,6 +1506,35 @@ export default function App() {
     return true;
   };
 
+  // Remove a buddy pairing on BOTH members
+  const unpairBuddy = async (memberId, { silent = false } = {}) => {
+    const m = members.find(x => String(x.id) === String(memberId));
+    const buddyId = m?.buddy;
+    if (!buddyId) return true;
+    const ids = [memberId, buddyId];
+    const { error } = await supabase.from("members").update({ buddy_id: null }).in("id", ids);
+    if (error) { console.error("[unpair buddy]", error); showToast("⚠️ Couldn't remove the buddy pairing — try again."); return false; }
+    const hit = (id) => ids.some(x => String(x) === String(id));
+    setMembersState(prev => prev.map(mb => hit(mb.id) ? { ...mb, buddy: null } : mb));
+    setUser(prev => prev && hit(prev.id) ? { ...prev, buddy: null } : prev);
+    if (!silent) showToast("Buddy pairing removed");
+    return true;
+  };
+
+  // Change a member's profession (removes their buddy pairing first, since buddies are Engineer + War Leader)
+  const changeProfession = async (memberId, profession) => {
+    const m = members.find(x => String(x.id) === String(memberId));
+    if (!m || m.profession === profession) return true;
+    const hadBuddy = !!m.buddy;
+    if (hadBuddy && !(await unpairBuddy(memberId, { silent: true }))) return false;
+    const { error } = await supabase.from("members").update({ profession }).eq("id", memberId);
+    if (error) { console.error("[change profession]", error); showToast("⚠️ Couldn't change profession — try again."); return false; }
+    setMembersState(prev => prev.map(mb => String(mb.id) === String(memberId) ? { ...mb, profession } : mb));
+    setUser(prev => prev && String(prev.id) === String(memberId) ? { ...prev, profession } : prev);
+    showToast(`Profession set to ${profession === "engineer" ? "🔧 Engineer" : "⚔️ War Leader"}${hadBuddy ? " — buddy pairing removed" : ""}`);
+    return true;
+  };
+
   // Buddy requests: removing one from the list marks it dismissed in the database
   const setBuddyRequests = (updater) => {
     setBuddyRequestsState(prev => {
@@ -1655,6 +1707,7 @@ export default function App() {
 
   return (
     <StormConfigContext.Provider value={{ config: stormConfig, save: saveStormConfig, plans: battlePlans, savePlan: saveBattlePlan }}>
+    <BuddyActionsContext.Provider value={{ unpairBuddy, changeProfession, isR4 }}>
       <style>{css}</style>
       <div className="app-shell">
         <TopBar user={user} t={t} onLogout={logout} setPage={setPage} darkMode={darkMode} setDarkMode={setDarkMode} />
@@ -1672,6 +1725,7 @@ export default function App() {
         <UpdateBanner />
         {viewMember && <MemberCard member={viewMember} members={members} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} allDsHistory={dsAllSignups} onClose={() => setViewMember(null)} />}
       </div>
+    </BuddyActionsContext.Provider>
     </StormConfigContext.Provider>
   );
 }
@@ -1980,6 +2034,7 @@ function BottomNav({ page, setPage, t, isR4, members, buddyRequests }) {
 function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, setDsSignups, t, showToast, setPage, vsMode, setVsMode, isR4, trains, stormSettings }) {
   const [signupModal, setSignupModal] = useState(null);
   const [buddyModal, setBuddyModal] = useState(false);
+  const [profModal, setProfModal] = useState(false);
   const me = (members || []).find(m => String(m.id) === String(user.id)) || user;
   const buddy = me.buddy ? (members || []).find(m => String(m.id) === String(me.buddy)) : null;
   const buddyPending = (buddyRequests || []).some(r => String(r.memberId) === String(user.memberId));
@@ -2042,16 +2097,14 @@ function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignu
       {/* Buddy */}
       <div style={{ marginBottom: 20 }}>
         {buddy ? (
-          <div className="buddy-card">
+          <div className="buddy-card" role="button" tabIndex={0} style={{ cursor: "pointer" }}
+            onClick={() => setProfModal(true)} onKeyDown={e => { if (e.key === "Enter") setProfModal(true); }}>
             <div className="buddy-icon">🤝</div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>{t.myBuddy}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }} className={buddy.profession === "engineer" ? "name-engineer" : "name-warleader"}>{buddy.username}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-                <span className="badge">{buddy.profession === "engineer" ? "🔧 " + t.engineer : "⚔️ " + t.warLeader}</span>
-                <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: "2px 8px", color: "var(--text-dim)" }} onClick={() => setPage("profile")}>Change profession</button>
-              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} className={buddy.profession === "engineer" ? "name-engineer" : "name-warleader"}>{buddy.username}</div>
             </div>
+            <span style={{ fontSize: 13, color: "var(--gold)", fontWeight: 600, flexShrink: 0 }}>Manage ›</span>
           </div>
         ) : (
           <div className="buddy-card" style={{ background: "var(--surface2)", border: "1.5px dashed var(--border)" }}>
@@ -2101,8 +2154,25 @@ function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignu
         const csAssign = (canyonSeasonActive || isR4) ? getAssignment(csTeams, "canyon") : null;
         const dsAssign = getAssignment(dsTeams, "desert");
         if (!csAssign && !dsAssign) return null;
+        const shortSlot = (sl) => !sl ? "" : sl === "Floater" ? "Flt" : sl.replace(/^Team\s*/i, "T");
+        const shortDate = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+        if (csAssign && dsAssign) return (
+          <div style={{ marginBottom: 20 }}>
+            <h2 className="section-title" style={{ marginBottom: 12 }}>Storm Assignments</h2>
+            <div className="assign-row">
+              {[{ ...csAssign, name: "CANYON", type: "canyon" }, { ...dsAssign, name: "DESERT", type: "desert" }].map(a => (
+                <div key={a.type} className="assign-mini" role="button" tabIndex={0} onClick={() => setPage("battle")} onKeyDown={e => { if (e.key === "Enter") setPage("battle"); }}>
+                  <div className="assign-mini-l1"><span aria-hidden="true">{a.team === "A" ? "🅰️" : "🅱️"}</span>{a.name}</div>
+                  <div className="assign-mini-l2">Team {a.team}{a.slot ? ` • ${shortSlot(a.slot)}` : ""}{a.role ? <span className="assign-mini-role"> ({a.role})</span> : null}</div>
+                  <div className="assign-mini-l3"><span>⏰ {a.time} · {shortDate(a.date)}</span><span className="assign-mini-view">View →</span></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
         return (
           <div style={{ marginBottom: 20 }}>
+            <h2 className="section-title" style={{ marginBottom: 12 }}>Storm Assignments</h2>
             {[csAssign && { ...csAssign, label: "🏔️ Canyon Storm", type: "canyon" }, dsAssign && { ...dsAssign, label: "🏜️ Desert Storm", type: "desert" }]
               .filter(Boolean).map(a => (
               <div key={a.type} className="assign-card" onClick={() => setPage("battle")}>
@@ -2132,6 +2202,7 @@ function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignu
       </div>
 
       {/* Modals */}
+      {profModal && <ProfessionBuddyModal member={me} members={members} self onClose={() => setProfModal(false)} />}
       {buddyModal && <BuddyRequestModal user={me} onClose={() => setBuddyModal(false)} showToast={showToast} t={t}
         onSuccess={(saved) => setBuddyRequestsState(prev => prev.some(r => r.id === saved.id) ? prev : [...prev, { id: saved.id, memberId: saved.member_id, profession: saved.profession, needBuddy: saved.need_buddy, buddyName: saved.buddy_name, submittedAt: new Date(saved.created_at) }])} />}
       {signupModal && <SignupModal type={signupModal} user={user} existing={signupModal === "canyon" ? myCS : myDS}
@@ -2146,6 +2217,57 @@ function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignu
         }
         setSignupModal(null); showToast("Registration saved! ✓");
       }} t={t} isCanyon={signupModal === "canyon"} />}
+    </div>
+  );
+}
+
+// ─── PROFESSION / BUDDY POP-UP (shared) ───────────────────────────────────────
+// self = the logged-in member managing themselves (wording says "your")
+function ProfessionBuddyModal({ member, members, self, onClose }) {
+  const { unpairBuddy, changeProfession } = useBuddyActions();
+  const [busy, setBusy] = useState(false);
+  const live = (members || []).find(m => String(m.id) === String(member?.id)) || member;
+  if (!live) return null;
+  const buddy = live.buddy ? (members || []).find(m => String(m.id) === String(live.buddy)) : null;
+  const whose = self ? "your" : `${live.username}'s`;
+
+  const pick = async (profession) => {
+    if (busy || live.profession === profession) return;
+    if (buddy && !window.confirm(`Changing ${whose} profession removes the buddy pairing with ${buddy.username}. Continue?`)) return;
+    setBusy(true); await changeProfession(live.id, profession); setBusy(false);
+  };
+  const remove = async () => {
+    if (!buddy || busy) return;
+    if (!window.confirm(`Remove the buddy pairing between ${live.username} and ${buddy.username}?`)) return;
+    setBusy(true); await unpairBuddy(live.id); setBusy(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 400 }}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 380 }}>
+        <div className="modal-header">
+          <div className="modal-title">🤝 {self ? "Profession & Buddy" : live.username}</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 14 }}>
+            {buddy ? <>Buddy: <strong className={buddy.profession === "engineer" ? "name-engineer" : "name-warleader"}>{buddy.username}</strong></> : <span style={{ color: "var(--text-dim)" }}>No buddy assigned</span>}
+          </div>
+          <div className="form-label">Profession</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {[["engineer", "🔧 Engineer"], ["warLeader", "⚔️ War Leader"]].map(([val, label]) => (
+              <button key={val} type="button" disabled={busy} onClick={() => pick(val)}
+                className={`btn ${live.profession === val ? "btn-primary" : "btn-secondary"}`} aria-pressed={live.profession === val}>{label}</button>
+            ))}
+          </div>
+          {buddy && (
+            <button type="button" className="btn btn-danger btn-full" style={{ marginTop: 14 }} disabled={busy} onClick={remove}>Remove buddy</button>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2205,6 +2327,8 @@ function BuddyRequestModal({ user, onClose, onSuccess, showToast, t }) {
 
 // ─── ADMIN BUDDY ──────────────────────────────────────────────────────────────
 function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, showToast }) {
+  const { unpairBuddy } = useBuddyActions();
+  const [profMember, setProfMember] = useState(null);
   const [eng, setEng] = useState("");
   const [wl, setWl] = useState("");
   const nameFor = (r) => members.find(m => String(m.memberId) === String(r.memberId) || String(m.id) === String(r.memberId))?.username || r.memberId;
@@ -2256,7 +2380,8 @@ function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, s
       </div>
       <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13, color: "var(--text-mid)", textTransform: "uppercase", letterSpacing: 0.5 }}>Current Buddy Pairs ({pairs.length})</div>
       {pairs.length === 0 && <div style={{ fontSize: 13, color: "var(--text-dim)", padding: "12px 0" }}>No pairs yet.</div>}
-      {/* Unassigned members */}
+      {/* Unassigned members — tap a name to change their profession */}
+      <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>Tap a name to change their profession</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="card-header">
@@ -2267,7 +2392,7 @@ function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, s
             {engineers.length === 0
               ? <div style={{ fontSize: 13, color: "var(--text-dim)" }}>All paired ✓</div>
               : engineers.map(m => (
-                <div key={m.id} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600 }} className="name-engineer">{m.username}</div>
+                <div key={m.id} role="button" tabIndex={0} onClick={() => setProfMember(m)} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 6 }} className="name-engineer"><span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{m.username}</span><span style={{ color: "var(--text-dim)", fontWeight: 400, fontSize: 12 }}>⇄</span></div>
               ))
             }
           </div>
@@ -2281,7 +2406,7 @@ function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, s
             {warLeaders.length === 0
               ? <div style={{ fontSize: 13, color: "var(--text-dim)" }}>All paired ✓</div>
               : warLeaders.map(m => (
-                <div key={m.id} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600 }} className="name-warleader">{m.username}</div>
+                <div key={m.id} role="button" tabIndex={0} onClick={() => setProfMember(m)} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 6 }} className="name-warleader"><span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{m.username}</span><span style={{ color: "var(--text-dim)", fontWeight: 400, fontSize: 12 }}>⇄</span></div>
               ))
             }
           </div>
@@ -2294,14 +2419,10 @@ function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, s
             <span style={{ color: "var(--border)" }}>↔</span>
             <span className="name-warleader">⚔️ {p.a.profession === "warLeader" ? p.a.username : p.b.username}</span>
           </div>
-          <button className="btn btn-sm btn-danger" style={{ padding: "3px 10px", fontSize: 12 }} onClick={async () => {
-            await supabase.from("members").update({ buddy_id: null }).eq("id", p.a.id);
-            await supabase.from("members").update({ buddy_id: null }).eq("id", p.b.id);
-            setMembers(m => m.map(mb => String(mb.id) === String(p.a.id) || String(mb.id) === String(p.b.id) ? { ...mb, buddy: null } : mb));
-            showToast("Pair removed.");
-          }}>Remove</button>
+          <button className="btn btn-sm btn-danger" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => unpairBuddy(p.a.id)}>Remove</button>
         </div>
       ))}
+      {profMember && <ProfessionBuddyModal member={profMember} members={members} onClose={() => setProfMember(null)} />}
     </div>
   );
 }
@@ -3083,6 +3204,7 @@ function computeStormStats(userId, csTeams, dsTeams, csSignups, dsSignups) {
 }
 
 function ProfilePage({ user, setUser, members, setMembers, t, setLang, showToast, csTeams, dsTeams, csSignups, dsSignups }) {
+  const { unpairBuddy } = useBuddyActions();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ username: user.username, profession: user.profession, language: user.language });
   const [pwForm, setPwForm] = useState({ current: "", newPw: "", confirm: "" });
@@ -3092,14 +3214,13 @@ function ProfilePage({ user, setUser, members, setMembers, t, setLang, showToast
 
   const saveProfile = async () => {
     const me = (members || []).find(m => String(m.id) === String(user.id)) || user;
-    const professionChanged = form.profession !== user.profession;
+    const professionChanged = form.profession !== me.profession;
     const oldBuddy = professionChanged ? me.buddy : null;
-    const updated = { ...user, ...form, ...(oldBuddy ? { buddy: null } : {}) };
     if (oldBuddy) {
-      await supabase.from("members").update({ buddy_id: null }).eq("id", user.id);
-      await supabase.from("members").update({ buddy_id: null }).eq("id", oldBuddy);
-      setMembers(m => m.map(mb => String(mb.id) === String(oldBuddy) ? { ...mb, buddy: null } : mb));
+      if (!window.confirm("Changing your profession removes your buddy pairing. Continue?")) return;
+      if (!(await unpairBuddy(user.id, { silent: true }))) return;
     }
+    const updated = { ...user, ...form, buddy: oldBuddy ? null : (me.buddy || null) };
 
     setUser(updated);
     setMembers(m => m.map(mb => mb.id === user.id ? updated : mb));
@@ -3110,7 +3231,7 @@ function ProfilePage({ user, setUser, members, setMembers, t, setLang, showToast
     setLang(form.language);
     setEditing(false);
     try { localStorage.setItem("zx7_session", JSON.stringify({ userId: updated.id, language: updated.language })); } catch {}
-    showToast(oldBuddy ? "Profile updated ✓ — Buddy unlinked due to profession change" : "Profile updated ✓");
+    showToast(oldBuddy ? "Profile updated ✓ — buddy pairing removed" : "Profile updated ✓");
   };
 
   const changePassword = async () => {
