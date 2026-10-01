@@ -497,6 +497,10 @@ const SECURITY_QUESTIONS = [
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 // Game server is UTC-2. When user enters "15:00 server time" we store as 17:00 UTC.
 const SERVER_UTC_OFFSET_HOURS = 2; // server = UTC - 2
+// "Now" on the game server clock. Read it with getUTC*() / toISOString() to get server date & time.
+const serverNow = () => new Date(Date.now() - SERVER_UTC_OFFSET_HOURS * 3600000);
+// Today's date on the server, "YYYY-MM-DD"
+const serverToday = () => serverNow().toISOString().split("T")[0];
 
 // Returns the NEXT upcoming battle date key — always forward-looking.
 // Canyon battle = Thursday, Desert battle = Friday.
@@ -504,7 +508,7 @@ const SERVER_UTC_OFFSET_HOURS = 2; // server = UTC - 2
 // This is the key used for sign-ups and teams for the current cycle.
 // Admin manually clears signups + teams via the Clear button — no automatic rollover.
 const getSignupWeek = (type) => {
-  const now = new Date();
+  const now = serverNow();
   const utcDay = now.getUTCDay();
   if (type === "canyon") {
     // 0 if today is Thursday, otherwise days until next Thursday
@@ -521,7 +525,7 @@ const getSignupWeek = (type) => {
 // Week key for NEW member sign-ups. Same as getSignupWeek except on battle day itself,
 // where sign-ups go to the NEXT battle (today's teams/sign-ups stay on today's key).
 const getNextSignupWeek = (type) => {
-  const now = new Date();
+  const now = serverNow();
   const target = type === "canyon" ? 4 : 5;
   const daysUntil = ((target - now.getUTCDay() + 7) % 7) || 7;
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysUntil));
@@ -579,7 +583,15 @@ const formatPower = (val) => {
   return num.toString();
 };
 
-const formatDate = (date) => new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+// Dates are shown on the server calendar: "YYYY-MM-DD" keys as-is, timestamps converted to server time
+const formatDate = (date) => {
+  if (!date) return "—";
+  const d = typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(date + "T12:00:00Z")
+    : new Date(new Date(date).getTime() - SERVER_UTC_OFFSET_HOURS * 3600000);
+  if (isNaN(d)) return "—";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+};
 
 const timeUntil = (date) => {
   const diff = new Date(date) - Date.now();
@@ -1061,7 +1073,7 @@ function MemberCard({ member, csTeams, dsTeams, csSignups, dsSignups, allDsHisto
         <div style={{ padding: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
             {[["⚡", "Power", member.power ? (member.power/1000000).toFixed(2)+"M" : "—"],
-              ["📅", "Joined", member.joinDate ? new Date(member.joinDate).toLocaleDateString("en-US",{month:"short",year:"2-digit"}) : "—"]
+              ["📅", "Joined", member.joinDate ? new Date(String(member.joinDate).slice(0, 10) + "T12:00:00Z").toLocaleDateString("en-US",{month:"short",year:"2-digit",timeZone:"UTC"}) : "—"]
             ].map(([icon, label, val]) => (
               <div key={label} style={{ background: "var(--bg)", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
                 <div style={{ fontSize: 16 }}>{icon}</div>
@@ -1143,7 +1155,7 @@ export default function App() {
 
   // Trains + train goals use a Monday week start
   const getWeekStart = () => {
-    const d = new Date();
+    const d = serverNow();
     const day = d.getUTCDay();
     const diff = (day === 0 ? -6 : 1) - day;
     d.setUTCDate(d.getUTCDate() + diff);
@@ -1367,9 +1379,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    let lastDay = new Date().getUTCDay();
+    let lastDay = serverNow().getUTCDay();
     const interval = setInterval(() => {
-      const currentDay = new Date().getUTCDay();
+      const currentDay = serverNow().getUTCDay();
       if (currentDay === lastDay) return;
       lastDay = currentDay;
       refreshSignups();
@@ -1879,7 +1891,7 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
 
       {/* My Train */}
       {(() => {
-        const todayStr = new Date().toISOString().split("T")[0];
+        const todayStr = serverToday();
         const myTrains = trains.filter(tr => {
           const isUpcoming = tr.date >= todayStr;
           const isMe = String(tr.conductorId) === String(user.id) || String(tr.guardianId) === String(user.id);
@@ -1943,7 +1955,7 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
                     {a.role && <span style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 400, marginLeft: 6 }}>({a.role})</span>}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-mid)", marginTop: 2 }}>
-                    ⏰ {a.time} server time • {new Date(a.date + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                    ⏰ {a.time} server time • {new Date(a.date + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}
                   </div>
                 </div>
                 <span style={{ fontSize: 12, color: "var(--gold)", fontWeight: 600 }}>View →</span>
@@ -2744,7 +2756,7 @@ function computeStormStats(userId, csTeams, dsTeams, csSignups, dsSignups) {
     const [, dateStr] = key.split(":");
     if (!dateStr) return false;
     // Battle date + 1 hour grace period
-    return now > new Date(dateStr + "T23:59:00Z").getTime();
+    return now > new Date(dateStr + "T23:59:00Z").getTime() + SERVER_UTC_OFFSET_HOURS * 3600000; // end of battle day, server time
   };
 
   const madeTeam = results.filter(([,r]) => r === "made").length;
@@ -3753,7 +3765,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
       return `${name},${s.power},${s.squadType},${s.availability},${timePref},${flex},${a.team||""},${a.slot||""},${a.role||""},${attendance[s.userId]?"Yes":"No"}`;
     }).join("\n");
     const blob = new Blob([header+rows], { type: "text/csv" });
-    const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href=url; el.download=`${tab}-${new Date().toISOString().split("T")[0]}.csv`; el.click();
+    const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href=url; el.download=`${tab}-${serverToday()}.csv`; el.click();
     showToast("CSV exported!");
   };
 
@@ -4168,7 +4180,7 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
     ).join("\n");
     const blob = new Blob([header + rows], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const el = document.createElement("a"); el.href = url; el.download = `members-${new Date().toISOString().split("T")[0]}.csv`; el.click();
+    const el = document.createElement("a"); el.href = url; el.download = `members-${serverToday()}.csv`; el.click();
     showToast("Members exported!");
   };
 
@@ -4503,7 +4515,7 @@ function TrainCountdown({ target }) {
 // ─── TRAINS PAGE (Member view) ────────────────────────────────────────────────
 function TrainsPage({ user, trains, trainGoals, members }) {
   const getName = (id) => members.find(m => String(m.id) === String(id))?.username || "TBD";
-  const today = new Date().toISOString().split("T")[0];
+  const today = serverToday();
 
   // Get current week start (Monday)
   const getWeekStart = (date) => {
@@ -4515,7 +4527,7 @@ function TrainsPage({ user, trains, trainGoals, members }) {
   };
 
   const thisWeek = getWeekStart(today);
-  const nextWeek = getWeekStart(new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0]);
+  const nextWeek = getWeekStart(new Date(serverNow().getTime() + 7 * 86400000).toISOString().split("T")[0]);
 
   const thisWeekTrains = trains.filter(tr => getWeekStart(tr.date) === thisWeek).sort((a,b) => a.date.localeCompare(b.date));
   const nextWeekGoal = trainGoals.find(g => g.weekStart === nextWeek);
@@ -4595,8 +4607,8 @@ function AdminTrains({ trains, trainGoals, members, showToast }) {
     return d.toISOString().split("T")[0];
   };
 
-  const today = new Date().toISOString().split("T")[0];
-  const nextWeek = getWeekStart(new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0]);
+  const today = serverToday();
+  const nextWeek = getWeekStart(new Date(serverNow().getTime() + 7 * 86400000).toISOString().split("T")[0]);
   const currentGoal = trainGoals.find(g => g.weekStart === nextWeek);
 
   const saveTrain = async () => {
