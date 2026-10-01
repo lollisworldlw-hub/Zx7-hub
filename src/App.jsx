@@ -2675,7 +2675,6 @@ function BattlePlansPage({ user, csTeams, dsTeams, t, stormSettings, isR4, battl
 
 function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes, customPlan, isR4, saveBattlePlan, showToast, t }) {
   const [mapBig, setMapBig] = useState(false);
-  const [editing, setEditing] = useState(false);
   const username = user.username;
   const userId = String(user.id);
 
@@ -2829,12 +2828,9 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
       {/* Battle Plan Title */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 16 }}>
         <div style={{ fontFamily: "'Rajdhani', sans-serif", fontWeight: 700, fontSize: 21 }}>{t.battlePlanStrategy}</div>
-        {isR4 && !editing && <button className="btn btn-sm btn-secondary" onClick={() => setEditing(true)}>✏️ Edit Plan</button>}
       </div>
 
-      {editing ? (
-        <BattlePlanEditor type={type} showToast={showToast} onDone={() => setEditing(false)} />
-      ) : <>
+      <>
 
       {/* Map — tap to expand */}
       <div style={{ marginBottom: 20 }}>
@@ -2847,7 +2843,7 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
         customPlan.same ? (
           <PlanText text={customPlan.a} />
         ) : (
-          (mine?.team === "B" ? ["B", "A"] : ["A", "B"]).map(team => (
+          ["A", "B"].map(team => (
             <div key={team} style={{ marginBottom: 20 }}>
               <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10, color: team === "A" ? "var(--gold)" : "var(--blue)" }}>
                 ⚔️ Team {team} Battle Plan{mine?.team === team ? <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-dim)", marginLeft: 8 }}>⭐ your team</span> : null}
@@ -2882,7 +2878,7 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
       </div>
       </>)}
 
-      </>}
+      </>
 
       {/* Full-screen map modal */}
       {mapBig && (
@@ -2898,7 +2894,7 @@ function BattlePlanView({ data, weekKey, type, user, mapSrc, mapAlt, plan, notes
 }
 
 // ─── BATTLE PLAN EDITOR (R4 / Admin) ─────────────────────────────────────────
-// One editor for the battle plan: used on the Plans page (✏️ Edit Plan) and in ⚙️ Storm Settings.
+// One editor for the battle plan: opened from ⚙️ Storm Settings in Management (the Plans tab is view-only).
 // Saves to the existing app_settings key battle_plan_<storm> as { same, a, b, map }.
 
 // Shrink an uploaded image so it can be stored in the database
@@ -2961,7 +2957,7 @@ function BattlePlanEditor({ type, showToast, onDone, inModal }) {
 
   return (
     <div>
-      {!inModal && (
+      {(
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-header"><div className="card-title">🗺️ Battle Map</div></div>
           <div className="card-body">
@@ -3864,7 +3860,6 @@ function StormSettingsModal({ type, showToast, onClose, isAdmin, seasonActive, o
 
           <div style={sectionTitle}>📝 Battle plan</div>
           <BattlePlanEditor type={type} showToast={showToast} onDone={onClose} inModal />
-          <div className="form-hint" style={{ marginTop: 10 }}>To change the map picture, use ✏️ Edit Plan on the Plans page.</div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>Close</button>
