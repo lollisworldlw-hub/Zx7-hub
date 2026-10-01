@@ -1054,7 +1054,7 @@ function DSGrowthChart({ user, dsSignups }) {
 
 
 // ─── MEMBER PROFILE MODAL ─────────────────────────────────────────────────────
-function MemberCard({ member, csTeams, dsTeams, csSignups, dsSignups, allDsHistory, onClose }) {
+function MemberCard({ member, members, csTeams, dsTeams, csSignups, dsSignups, allDsHistory, onClose }) {
   const [showGrowth, setShowGrowth] = useState(false);
   if (!member) return null;
   const stats = computeStormStats(member.id, csTeams || {}, dsTeams || {}, csSignups || [], dsSignups || []);
@@ -1083,6 +1083,10 @@ function MemberCard({ member, csTeams, dsTeams, csSignups, dsSignups, allDsHisto
               </div>
             ))}
           </div>
+          {(() => {
+            const buddy = member.buddy ? (members || []).find(b => String(b.id) === String(member.buddy)) : null;
+            return buddy ? <div style={{ background: "var(--bg)", borderRadius: 10, padding: "8px 12px", marginBottom: 10, fontSize: 13 }}>🤝 Buddy: <strong>{buddy.username}</strong></div> : null;
+          })()}
           {stats.signedUp > 0 ? (
             <div style={{ background: "var(--bg)", borderRadius: 10, padding: "12px 14px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1151,6 +1155,7 @@ export default function App() {
   const [stormConfig, setStormConfig] = useState(DEFAULT_STORM_CONFIG); // sign-up times + spots per assignment
   const [trains, setTrainsState] = useState([]);
   const [trainGoals, setTrainGoalsState] = useState([]);
+  const [buddyRequests, setBuddyRequestsState] = useState([]);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -1163,6 +1168,11 @@ export default function App() {
     return d.toISOString().split("T")[0];
   };
 
+  const mapBuddyRequest = (r) => ({
+    id: r.id, memberId: r.member_id, profession: r.profession,
+    needBuddy: r.need_buddy, buddyName: r.buddy_name, submittedAt: new Date(r.created_at),
+  });
+
   const mapMember = (m) => ({
     id: m.id, memberId: m.member_code, username: m.username,
     password: m.password_hash, role: m.role, approved: m.approved,
@@ -1171,6 +1181,7 @@ export default function App() {
     securityA: m.security_answer,
     signupCount: m.signup_count || 0, attendanceCount: m.attendance_count || 0,
     disabled: m.disabled || false,
+    buddy: m.buddy_id || null,
   });
 
   const mapSignup = (s) => ({
@@ -1204,6 +1215,7 @@ export default function App() {
         { data: teamsData },
         { data: trainsData },
         { data: trainGoalsData },
+        { data: buddyData },
         { data: stormSettingsData },
         { data: appSettingsData },
       ] = await Promise.all([
@@ -1215,6 +1227,7 @@ export default function App() {
         supabase.from("battle_teams").select("*"),
         supabase.from("trains").select("*").order("train_date", { ascending: true }),
         supabase.from("train_goals").select("*").order("week_start", { ascending: false }),
+        supabase.from("buddy_requests").select("*").eq("dismissed", false).order("created_at", { ascending: true }),
         supabase.from("storm_settings").select("*"),
         supabase.from("app_settings").select("*"),
       ]);
@@ -1254,6 +1267,7 @@ export default function App() {
       }
 
       if (trainsData) setTrainsState(trainsData.map(mapTrain));
+      if (buddyData) setBuddyRequestsState(buddyData.map(mapBuddyRequest));
       if (trainGoalsData) setTrainGoalsState(trainGoalsData.map(g => ({ id: g.id, weekStart: g.week_start, goal: g.goal })));
 
       if (stormSettingsData) {
@@ -1333,6 +1347,13 @@ export default function App() {
       supabase.channel("battle-teams-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "battle_teams" }, () => refreshTeams())
         .subscribe(),
+
+      supabase.channel("buddy-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "buddy_requests" }, (payload) => {
+          if (payload.eventType === "INSERT" && !payload.new.dismissed) setBuddyRequestsState(prev => prev.some(r => r.id === payload.new.id) ? prev : [...prev, mapBuddyRequest(payload.new)]);
+          if (payload.eventType === "UPDATE" && payload.new.dismissed) setBuddyRequestsState(prev => prev.filter(r => r.id !== payload.new.id));
+          if (payload.eventType === "DELETE") setBuddyRequestsState(prev => prev.filter(r => r.id !== payload.old.id));
+        }).subscribe(),
 
       supabase.channel("trains-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "trains" }, (payload) => {
@@ -1424,6 +1445,7 @@ export default function App() {
             power: m.power,
             signup_count: m.signupCount, attendance_count: m.attendanceCount,
             disabled: m.disabled || false,
+            ...(String(existing.buddy || "") !== String(m.buddy || "") ? { buddy_id: m.buddy || null } : {}),
           }).eq("id", m.id);
         }
       });
@@ -1450,6 +1472,17 @@ export default function App() {
     if (error) { console.error("[battle plan save]", error); showToast("⚠️ Couldn't save the battle plan — try again."); return false; }
     setBattlePlans(prev => ({ ...prev, [type]: plan }));
     return true;
+  };
+
+  // Buddy requests: removing one from the list marks it dismissed in the database
+  const setBuddyRequests = (updater) => {
+    setBuddyRequestsState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      prev.forEach(async (r) => {
+        if (!next.find(n => n.id === r.id)) await supabase.from("buddy_requests").update({ dismissed: true }).eq("id", r.id);
+      });
+      return next;
+    });
   };
 
   // Storm settings (sign-up times, spots per assignment) shared through app_settings
@@ -1618,17 +1651,17 @@ export default function App() {
         <TopBar user={user} t={t} onLogout={logout} setPage={setPage} darkMode={darkMode} setDarkMode={setDarkMode} />
         <main className="main-content">
           {page === "home" && <InstallBanner />}
-          {page === "home" && <HomePage user={user} csSignups={csSignups} dsSignups={dsSignups} csTeams={csTeams} dsTeams={dsTeams} setCsSignups={setCsSignups} setDsSignups={setDsSignups} t={t} showToast={showToast} setPage={setPage} vsMode={vsMode} setVsMode={setVsMode} isR4={isR4} trains={trains} stormSettings={stormSettings} />}
+          {page === "home" && <HomePage user={user} members={members} buddyRequests={buddyRequests} setBuddyRequestsState={setBuddyRequestsState} csSignups={csSignups} dsSignups={dsSignups} csTeams={csTeams} dsTeams={dsTeams} setCsSignups={setCsSignups} setDsSignups={setDsSignups} t={t} showToast={showToast} setPage={setPage} vsMode={vsMode} setVsMode={setVsMode} isR4={isR4} trains={trains} stormSettings={stormSettings} />}
           {page === "trains" && <TrainsPage user={user} trains={trains} trainGoals={trainGoals} members={members} />}
           {page === "battle" && <BattlePlansPage user={user} csTeams={csTeams} dsTeams={dsTeams} t={t} stormSettings={stormSettings} isR4={isR4} battlePlans={battlePlans} saveBattlePlan={saveBattlePlan} showToast={showToast} />}
-          {page === "profile" && <ProfilePage user={user} setUser={setUser} setMembers={setMembers} t={t} setLang={setLang} showToast={showToast} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} />}
-          {page === "admin" && isR4 && <AdminPage setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} user={user} members={members} setMembers={setMembers} csSignups={csSignups} dsSignups={dsSignups} setCsSignups={setCsSignups} setDsSignups={setDsSignups} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} trains={trains} trainGoals={trainGoals} t={t} showToast={showToast} isAdmin={isAdmin} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
+          {page === "profile" && <ProfilePage user={user} setUser={setUser} members={members} setMembers={setMembers} t={t} setLang={setLang} showToast={showToast} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} />}
+          {page === "admin" && isR4 && <AdminPage buddyRequests={buddyRequests} setBuddyRequests={setBuddyRequests} setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} user={user} members={members} setMembers={setMembers} csSignups={csSignups} dsSignups={dsSignups} setCsSignups={setCsSignups} setDsSignups={setDsSignups} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} trains={trains} trainGoals={trainGoals} t={t} showToast={showToast} isAdmin={isAdmin} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
           {page === "calculators" && <CalculatorsPage />}
         </main>
-        <BottomNav page={page} setPage={setPage} t={t} isR4={isR4} members={members} />
+        <BottomNav page={page} setPage={setPage} t={t} isR4={isR4} members={members} buddyRequests={buddyRequests} />
         {toast && <div className="toast">{toast}</div>}
         <UpdateBanner />
-        {viewMember && <MemberCard member={viewMember} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} allDsHistory={dsAllSignups} onClose={() => setViewMember(null)} />}
+        {viewMember && <MemberCard member={viewMember} members={members} csTeams={csTeams} dsTeams={dsTeams} csSignups={csAllSignups} dsSignups={dsAllSignups} allDsHistory={dsAllSignups} onClose={() => setViewMember(null)} />}
       </div>
     </StormConfigContext.Provider>
   );
@@ -1899,8 +1932,8 @@ function TopBar({ user, t, onLogout, setPage, darkMode, setDarkMode }) {
 }
 
 // ─── BOTTOM NAV ───────────────────────────────────────────────────────────────
-function BottomNav({ page, setPage, t, isR4, members }) {
-  const hasAdminAlert = isR4 && members.some(m => !m.approved);
+function BottomNav({ page, setPage, t, isR4, members, buddyRequests }) {
+  const hasAdminAlert = isR4 && (members.some(m => !m.approved) || (buddyRequests || []).length > 0);
   const items = [
     { id: "home", label: t.home, icon: "🏠" },
     { id: "trains", label: "Trains", icon: "🚂" },
@@ -1935,8 +1968,12 @@ function BottomNav({ page, setPage, t, isR4, members }) {
 }
 
 // ─── HOME PAGE ────────────────────────────────────────────────────────────────
-function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, setDsSignups, t, showToast, setPage, vsMode, setVsMode, isR4, trains, stormSettings }) {
+function HomePage({ user, members, buddyRequests, setBuddyRequestsState, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, setDsSignups, t, showToast, setPage, vsMode, setVsMode, isR4, trains, stormSettings }) {
   const [signupModal, setSignupModal] = useState(null);
+  const [buddyModal, setBuddyModal] = useState(false);
+  const me = (members || []).find(m => String(m.id) === String(user.id)) || user;
+  const buddy = me.buddy ? (members || []).find(m => String(m.id) === String(me.buddy)) : null;
+  const buddyPending = (buddyRequests || []).some(r => String(r.memberId) === String(user.memberId));
 
   // On battle day, new sign-ups go to NEXT battle — today's sign-up stays put for today's teams
   const myCS = csSignups.find(s => String(s.userId) === String(user.id) && s.week === getNextSignupWeek("canyon"));
@@ -1992,6 +2029,40 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
           </div>
         );
       })()}
+
+      {/* Buddy */}
+      <div style={{ marginBottom: 20 }}>
+        {buddy ? (
+          <div className="buddy-card">
+            <div className="buddy-icon">🤝</div>
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>{t.myBuddy}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }} className={buddy.profession === "engineer" ? "name-engineer" : "name-warleader"}>{buddy.username}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+                <span className="badge">{buddy.profession === "engineer" ? "🔧 " + t.engineer : "⚔️ " + t.warLeader}</span>
+                <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: "2px 8px", color: "var(--text-dim)" }} onClick={() => setPage("profile")}>Change profession</button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="buddy-card" style={{ background: "var(--surface2)", border: "1.5px dashed var(--border)" }}>
+            <div className="buddy-icon" style={{ background: "var(--border)", color: "var(--text-dim)" }}>🤝</div>
+            <div>
+              {buddyPending ? (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--gold)" }}>⏳ Request Pending</div>
+                  <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>Leadership will pair you soon</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-mid)" }}>{t.noBuddy}</div>
+                  <button className="btn btn-sm btn-purple" style={{ marginTop: 8 }} onClick={() => setBuddyModal(true)}>{t.requestBuddy}</button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Battle Assignment Badges */}
       {(() => {
@@ -2052,6 +2123,8 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
       </div>
 
       {/* Modals */}
+      {buddyModal && <BuddyRequestModal user={me} onClose={() => setBuddyModal(false)} showToast={showToast} t={t}
+        onSuccess={(saved) => setBuddyRequestsState(prev => prev.some(r => r.id === saved.id) ? prev : [...prev, { id: saved.id, memberId: saved.member_id, profession: saved.profession, needBuddy: saved.need_buddy, buddyName: saved.buddy_name, submittedAt: new Date(saved.created_at) }])} />}
       {signupModal && <SignupModal type={signupModal} user={user} existing={signupModal === "canyon" ? myCS : myDS}
         lastSignup={null}
         onClose={() => setSignupModal(null)} showToast={showToast} onSave={(data) => {
@@ -2068,13 +2141,170 @@ function HomePage({ user, csSignups, dsSignups, csTeams, dsTeams, setCsSignups, 
   );
 }
 
+// ─── BUDDY REQUEST MODAL ──────────────────────────────────────────────────────
+function BuddyRequestModal({ user, onClose, onSuccess, showToast, t }) {
+  const [needBuddy, setNeedBuddy] = useState(true);
+  const [buddyName, setBuddyName] = useState("");
+  const [btnState, setBtnState] = useState("idle"); // idle | loading | done
+
+  const handleSubmit = async () => {
+    if (btnState !== "idle") return;
+    setBtnState("loading");
+    const { data: saved, error } = await supabase.from("buddy_requests").insert({
+      member_id: user.memberId,
+      profession: user.profession,
+      need_buddy: needBuddy,
+      buddy_name: buddyName || null,
+      dismissed: false,
+    }).select().single();
+    if (!error && saved) {
+      if (onSuccess) onSuccess(saved);
+      setBtnState("done");
+    } else {
+      showToast("Error: " + (error?.message || "Could not submit"));
+      setBtnState("idle");
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header"><div className="modal-title">🤝 {t.requestBuddy}</div><button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button></div>
+        <div className="modal-body">
+          <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 4 }}>Your Profile</div>
+            <div style={{ fontWeight: 700 }}>{user.username}</div>
+            <div style={{ fontSize: 13, color: "var(--text-mid)" }}>{user.profession === "engineer" ? "🔧 " + t.engineer : "⚔️ " + t.warLeader}</div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Buddy Status</label>
+            <div className="radio-group">
+              <div className={`radio-option ${needBuddy ? "selected" : ""}`} onClick={() => setNeedBuddy(true)}><div className="radio-dot"></div><span>I need a buddy</span></div>
+              <div className={`radio-option ${!needBuddy ? "selected" : ""}`} onClick={() => setNeedBuddy(false)}><div className="radio-dot"></div><span>I have a buddy</span></div>
+            </div>
+          </div>
+          {!needBuddy && <div className="form-group"><label className="form-label">Buddy's Username</label><input className="form-input" value={buddyName} onChange={e => setBuddyName(e.target.value)} placeholder="Enter their in-game name" /></div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>{btnState === "done" ? "Close" : t.cancel}</button>
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={btnState !== "idle"} style={btnState === "done" ? {background:"var(--green)",cursor:"default",opacity:1} : {}}>{btnState === "done" ? "✅ Submitted!" : btnState === "loading" ? "Submitting..." : t.submit}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ADMIN BUDDY ──────────────────────────────────────────────────────────────
+function AdminBuddy({ members, setMembers, buddyRequests, setBuddyRequests, t, showToast }) {
+  const [eng, setEng] = useState("");
+  const [wl, setWl] = useState("");
+  const nameFor = (r) => members.find(m => String(m.memberId) === String(r.memberId) || String(m.id) === String(r.memberId))?.username || r.memberId;
+  const pairedIds = new Set(members.filter(m => m.buddy).map(m => String(m.id)));
+  const engineers = members.filter(m => m.approved && !m.disabled && m.profession === "engineer" && !pairedIds.has(String(m.id))).sort((a,b) => a.username.localeCompare(b.username));
+  const warLeaders = members.filter(m => m.approved && !m.disabled && m.profession === "warLeader" && !pairedIds.has(String(m.id))).sort((a,b) => a.username.localeCompare(b.username));
+  const pairs = members.filter(m => m.buddy && !m.disabled).reduce((acc, m) => {
+    const buddy = members.find(b => String(b.id) === String(m.buddy) && !b.disabled);
+    if (buddy && !acc.find(p => p.a.id === m.id || p.b.id === m.id)) acc.push({ a: m, b: buddy });
+    return acc;
+  }, []);
+
+  const pairBuddies = async () => {
+    if (!eng || !wl) { showToast("Select both members."); return; }
+    const { error: e1 } = await supabase.from("members").update({ buddy_id: wl }).eq("id", eng);
+    const { error: e2 } = await supabase.from("members").update({ buddy_id: eng }).eq("id", wl);
+    if (e1 || e2) { showToast("⚠️ Couldn't pair — has the buddy database update been run?"); return; }
+    setMembers(m => m.map(mb => String(mb.id) === String(eng) ? { ...mb, buddy: wl } : String(mb.id) === String(wl) ? { ...mb, buddy: eng } : mb));
+    // Clear any open requests from the two members just paired
+    const pairedCodes = members.filter(mb => String(mb.id) === String(eng) || String(mb.id) === String(wl)).map(mb => String(mb.memberId));
+    setBuddyRequests(req => req.filter(r => !pairedCodes.includes(String(r.memberId))));
+    setEng(""); setWl(""); showToast("Buddies paired! ✓");
+  };
+
+  return (
+    <div>
+      {buddyRequests.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10, color: "var(--gold)" }}>⏳ {t.buddyRequests} ({buddyRequests.length})</div>
+          {buddyRequests.map(r => (
+            <div key={r.id} className="card" style={{ marginBottom: 8 }}>
+              <div className="card-body">
+                <div style={{ fontWeight: 700 }}>{nameFor(r)}</div>
+                <div style={{ fontSize: 13, color: "var(--text-mid)" }}>{r.profession === "engineer" ? "🔧 Engineer" : "⚔️ War Leader"} • {r.needBuddy ? "Needs a buddy" : `Has buddy: ${r.buddyName}`}</div>
+                <button className="btn btn-sm btn-danger" style={{ marginTop: 8 }} onClick={() => setBuddyRequests(req => req.filter(x => x.id !== r.id))}>Dismiss</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header"><div className="card-title">🤝 {t.addBuddy}</div></div>
+        <div className="card-body">
+          <div className="form-group"><label className="form-label">Engineer</label><select className="form-input form-select" value={eng} onChange={e => setEng(e.target.value)}><option value="">Select Engineer</option>{engineers.map(m => <option key={m.id} value={m.id}>{m.username}</option>)}</select></div>
+          <div className="form-group"><label className="form-label">War Leader</label><select className="form-input form-select" value={wl} onChange={e => setWl(e.target.value)}><option value="">Select War Leader</option>{warLeaders.map(m => <option key={m.id} value={m.id}>{m.username}</option>)}</select></div>
+          <button className="btn btn-primary" onClick={pairBuddies}>Pair Buddies</button>
+        </div>
+      </div>
+      <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13, color: "var(--text-mid)", textTransform: "uppercase", letterSpacing: 0.5 }}>Current Buddy Pairs ({pairs.length})</div>
+      {pairs.length === 0 && <div style={{ fontSize: 13, color: "var(--text-dim)", padding: "12px 0" }}>No pairs yet.</div>}
+      {/* Unassigned members */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <div className="card-title">🔧 Unassigned Engineers</div>
+            <span className="badge badge-gold">{engineers.length}</span>
+          </div>
+          <div className="card-body" style={{ padding: engineers.length === 0 ? "12px 16px" : "8px 0" }}>
+            {engineers.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--text-dim)" }}>All paired ✓</div>
+              : engineers.map(m => (
+                <div key={m.id} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600 }} className="name-engineer">{m.username}</div>
+              ))
+            }
+          </div>
+        </div>
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-header">
+            <div className="card-title">⚔️ Unassigned Leaders</div>
+            <span className="badge badge-gold">{warLeaders.length}</span>
+          </div>
+          <div className="card-body" style={{ padding: warLeaders.length === 0 ? "12px 16px" : "8px 0" }}>
+            {warLeaders.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--text-dim)" }}>All paired ✓</div>
+              : warLeaders.map(m => (
+                <div key={m.id} style={{ padding: "7px 16px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 600 }} className="name-warleader">{m.username}</div>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+      {pairs.map((p, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", borderRadius: 8, background: i % 2 === 0 ? "var(--surface)" : "var(--surface2)", border: "1px solid var(--border)", marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <span className="name-engineer">🔧 {p.a.profession === "engineer" ? p.a.username : p.b.username}</span>
+            <span style={{ color: "var(--border)" }}>↔</span>
+            <span className="name-warleader">⚔️ {p.a.profession === "warLeader" ? p.a.username : p.b.username}</span>
+          </div>
+          <button className="btn btn-sm btn-danger" style={{ padding: "3px 10px", fontSize: 12 }} onClick={async () => {
+            await supabase.from("members").update({ buddy_id: null }).eq("id", p.a.id);
+            await supabase.from("members").update({ buddy_id: null }).eq("id", p.b.id);
+            setMembers(m => m.map(mb => String(mb.id) === String(p.a.id) || String(mb.id) === String(p.b.id) ? { ...mb, buddy: null } : mb));
+            showToast("Pair removed.");
+          }}>Remove</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── ADMIN PAGE ───────────────────────────────────────────────────────────────
-function AdminPage({ setViewMember, csAllSignups, dsAllSignups, user, members, setMembers, csSignups, dsSignups, setCsSignups, setDsSignups, csTeams, setCsTeams, dsTeams, setDsTeams, trains, trainGoals, t, showToast, isAdmin, stormSettings, setStormSettings }) {
+function AdminPage({ buddyRequests, setBuddyRequests, setViewMember, csAllSignups, dsAllSignups, user, members, setMembers, csSignups, dsSignups, setCsSignups, setDsSignups, csTeams, setCsTeams, dsTeams, setDsTeams, trains, trainGoals, t, showToast, isAdmin, stormSettings, setStormSettings }) {
   const [tab, setTab] = useState("signups");
   const pending = members.filter(m => !m.approved);
   const tabDef = [
     ["signups", "⚔️ Storms", false],
     ["members", "👥 Members", pending.length > 0],
+    ["buddy", "🤝 Buddy", (buddyRequests || []).length > 0],
     ["trains", "🚂 Trains", false],
     ...(isAdmin ? [["data", "📊 Data", false]] : []),
   ];
@@ -2093,6 +2323,7 @@ function AdminPage({ setViewMember, csAllSignups, dsAllSignups, user, members, s
       </div>
       {tab === "signups" && <AdminSignups setMembers={setMembers} setViewMember={setViewMember} csAllSignups={csAllSignups} dsAllSignups={dsAllSignups} csSignups={csSignups} dsSignups={dsSignups} members={members} csTeams={csTeams} setCsTeams={setCsTeams} dsTeams={dsTeams} setDsTeams={setDsTeams} t={t} showToast={showToast} isAdmin={isAdmin} setCsSignups={setCsSignups} setDsSignups={setDsSignups} stormSettings={stormSettings} setStormSettings={setStormSettings} />}
       {tab === "members" && <AdminMembers setViewMember={setViewMember} members={members} setMembers={setMembers} t={t} showToast={showToast} isAdmin={isAdmin} user={user} />}
+      {tab === "buddy" && <AdminBuddy members={members} setMembers={setMembers} buddyRequests={buddyRequests || []} setBuddyRequests={setBuddyRequests} t={t} showToast={showToast} />}
       {tab === "trains" && <AdminTrains trains={trains} trainGoals={trainGoals} members={members} showToast={showToast} />}
       {tab === "data" && isAdmin && <AdminData members={members} setMembers={setMembers} csSignups={csAllSignups} dsSignups={dsAllSignups} t={t} showToast={showToast} />}
     </div>
@@ -2846,7 +3077,7 @@ function computeStormStats(userId, csTeams, dsTeams, csSignups, dsSignups) {
   return { signedUp, madeTeam, waitlisted, missed, pct };
 }
 
-function ProfilePage({ user, setUser, setMembers, t, setLang, showToast, csTeams, dsTeams, csSignups, dsSignups }) {
+function ProfilePage({ user, setUser, members, setMembers, t, setLang, showToast, csTeams, dsTeams, csSignups, dsSignups }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ username: user.username, profession: user.profession, language: user.language });
   const [pwForm, setPwForm] = useState({ current: "", newPw: "", confirm: "" });
@@ -2855,7 +3086,15 @@ function ProfilePage({ user, setUser, setMembers, t, setLang, showToast, csTeams
   const history = MOCK_POWER_HISTORY[user.id] || [];
 
   const saveProfile = async () => {
-    const updated = { ...user, ...form };
+    const me = (members || []).find(m => String(m.id) === String(user.id)) || user;
+    const professionChanged = form.profession !== user.profession;
+    const oldBuddy = professionChanged ? me.buddy : null;
+    const updated = { ...user, ...form, ...(oldBuddy ? { buddy: null } : {}) };
+    if (oldBuddy) {
+      await supabase.from("members").update({ buddy_id: null }).eq("id", user.id);
+      await supabase.from("members").update({ buddy_id: null }).eq("id", oldBuddy);
+      setMembers(m => m.map(mb => String(mb.id) === String(oldBuddy) ? { ...mb, buddy: null } : mb));
+    }
 
     setUser(updated);
     setMembers(m => m.map(mb => mb.id === user.id ? updated : mb));
@@ -2866,7 +3105,7 @@ function ProfilePage({ user, setUser, setMembers, t, setLang, showToast, csTeams
     setLang(form.language);
     setEditing(false);
     try { localStorage.setItem("zx7_session", JSON.stringify({ userId: updated.id, language: updated.language })); } catch {}
-    showToast("Profile updated ✓");
+    showToast(oldBuddy ? "Profile updated ✓ — Buddy unlinked due to profession change" : "Profile updated ✓");
   };
 
   const changePassword = async () => {
