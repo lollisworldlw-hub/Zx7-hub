@@ -525,9 +525,9 @@ const getSignupWeek = (type) => {
 // Week key for NEW member sign-ups. Same as getSignupWeek until the sign-up cut-off (see SIGNUP_ROLLOVER_DAYS),
 // after which sign-ups go to the NEXT battle (the current battle keeps its teams/sign-ups).
 // How many days before the battle new sign-ups start going to the FOLLOWING week's battle.
+// Canyon teams close Monday, so from Tuesday (2 days before the Thursday battle) sign-ups roll to next week.
 // Desert teams close Wednesday, so from Thursday (1 day before the Friday battle) sign-ups roll to next week.
-// Canyon rolls over on battle day itself (Thursday).
-const SIGNUP_ROLLOVER_DAYS = { canyon: 0, desert: 1 };
+const SIGNUP_ROLLOVER_DAYS = { canyon: 2, desert: 1 };
 const getNextSignupWeek = (type) => {
   const now = serverNow();
   const target = type === "canyon" ? 4 : 5;
