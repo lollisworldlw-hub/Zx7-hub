@@ -522,12 +522,17 @@ const getSignupWeek = (type) => {
   }
 };
 
-// Week key for NEW member sign-ups. Same as getSignupWeek except on battle day itself,
-// where sign-ups go to the NEXT battle (today's teams/sign-ups stay on today's key).
+// Week key for NEW member sign-ups. Same as getSignupWeek until the sign-up cut-off (see SIGNUP_ROLLOVER_DAYS),
+// after which sign-ups go to the NEXT battle (the current battle keeps its teams/sign-ups).
+// How many days before the battle new sign-ups start going to the FOLLOWING week's battle.
+// Desert teams close Wednesday, so from Thursday (1 day before the Friday battle) sign-ups roll to next week.
+// Canyon rolls over on battle day itself (Thursday).
+const SIGNUP_ROLLOVER_DAYS = { canyon: 0, desert: 1 };
 const getNextSignupWeek = (type) => {
   const now = serverNow();
   const target = type === "canyon" ? 4 : 5;
-  const daysUntil = ((target - now.getUTCDay() + 7) % 7) || 7;
+  let daysUntil = (target - now.getUTCDay() + 7) % 7; // 0 = battle is today
+  if (daysUntil <= (SIGNUP_ROLLOVER_DAYS[type] ?? 0)) daysUntil += 7;
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysUntil));
   return d.toISOString().split("T")[0];
 };
@@ -924,6 +929,7 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .team-pills button.badge { border: 1px solid var(--border); cursor: pointer; font-family: inherit; position: relative; }
 .team-pills .same-a { font-size: 7.5px; font-weight: 700; margin-left: 1px; vertical-align: super; line-height: 0; }
 @media (max-width: 380px) { .team-sticky { padding-left: 12px !important; padding-right: 12px !important; } }
+.next-battle-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--gold-pale); border: 1px solid var(--gold); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text); }
 .spots-counter { margin-right: auto; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .team-sticky { position: sticky; top: 60px; z-index: 40; background: var(--bg); margin: 0 -20px 8px; padding: 8px 20px; }
 @media (min-width: 640px) { .team-sticky { margin: 0 -32px 8px; padding: 8px 32px; } }
@@ -2568,6 +2574,7 @@ function SignupStatusCard({ type, label, mySignup, onSignup, onRevoke, t, isR4, 
           <div style={{ fontSize: 12, color: isOpen ? "var(--green)" : "var(--gold)", marginTop: 2 }}>
             {isOpen ? "✅ Sign-ups open — you're registered" : "⚔️ Registered — awaiting team assignment"}
           </div>
+          {mySignup.week && <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>📅 For the {new Date(mySignup.week + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })} battle</div>}
         </div>
         <div style={{ display: "flex", gap: 6, flexDirection: "column", alignItems: "flex-end" }}>
           {canInteract && <button className="btn btn-sm btn-secondary" onClick={onSignup}>{t.editSignup}</button>}
@@ -4083,6 +4090,10 @@ function StormSettingsModal({ type, showToast, onClose, isAdmin, seasonActive, o
 function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, csSignups: csSignupsLive, dsSignups: dsSignupsLive, members, csTeams, setCsTeams, dsTeams, setDsTeams, t, showToast, isAdmin, setCsSignups, setDsSignups, stormSettings, setStormSettings }) {
   // On battle day the loaded list also holds next battle's sign-ups — admin tools only use today's battle
   const csSignups = csSignupsLive.filter(s => s.week === getSignupWeek("canyon"));
+  // Battle day: sign-ups that already went to NEXT battle (shown in a separate list)
+  const csNextSignups = csSignupsLive.filter(s => s.week === getNextSignupWeek("canyon") && getNextSignupWeek("canyon") !== getSignupWeek("canyon"));
+  const dsNextSignups = dsSignupsLive.filter(s => s.week === getNextSignupWeek("desert") && getNextSignupWeek("desert") !== getSignupWeek("desert"));
+  const [nextOpen, setNextOpen] = useState(false);
   const dsSignups = dsSignupsLive.filter(s => s.week === getSignupWeek("desert"));
   const [tab, setTab] = useState("canyon");
   const { config: stormCfg } = useStormConfig();
@@ -4564,6 +4575,46 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
       {adminSignupOpen && <div style={{ marginBottom: 10 }}>
         <input className="form-input" value={signupSearch} onChange={e => setSignupSearch(e.target.value)} placeholder="🔍 Search by username..." style={{ maxWidth: 300 }} />
       </div>}
+
+      {/* After the sign-up cut-off, new sign-ups go to next week's battle — show them here so they aren't "missing" */}
+      {getNextSignupWeek(tab) !== getSignupWeek(tab) && (() => {
+        const nextList = tab === "canyon" ? csNextSignups : dsNextSignups;
+        const fmt = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+        return (<>
+          <div className="next-battle-note">
+            <span>📅 This list is the <strong>{fmt(getSignupWeek(tab))}</strong> battle (sign-ups closed). New sign-ups go to <strong>{fmt(getNextSignupWeek(tab))}</strong>: {nextList.length}</span>
+            {nextList.length > 0 && <button className="btn btn-sm btn-secondary" onClick={() => setNextOpen(true)}>View</button>}
+          </div>
+          {nextOpen && (
+            <div className="modal-overlay" onClick={() => setNextOpen(false)}>
+              <div className="modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <div className="modal-title">📅 {tab === "canyon" ? "Canyon" : "Desert"} — {fmt(getNextSignupWeek(tab))} sign-ups ({nextList.length})</div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setNextOpen(false)} aria-label="Close">✕</button>
+                </div>
+                <div className="modal-body" style={{ padding: "8px 12px" }}>
+                  <table className="data-table" style={{ fontSize: 13 }}>
+                    <thead><tr><th>Player</th><th>Pwr</th><th>Type</th><th>St</th><th>Time</th></tr></thead>
+                    <tbody>
+                      {[...nextList].sort((x, y) => getName(x.userId).localeCompare(getName(y.userId))).map(sg => (
+                        <tr key={sg.userId}>
+                          <td style={{ fontWeight: 600 }}>{getName(sg.userId)}</td>
+                          <td>{sg.power}</td>
+                          <td style={{ fontSize: 11 }}>{sg.squadType}</td>
+                          <td>{sg.availability === "confirmed" ? "✓" : sg.availability === "sub" ? "S" : "✗"}</td>
+                          <td style={{ fontSize: 11 }}>{timePrefLabel(sg.timePreference, offeredTimes, true)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="form-hint" style={{ marginTop: 8 }}>These move into the main list automatically tomorrow, ready for team building.</div>
+                </div>
+                <div className="modal-footer"><button className="btn btn-primary" onClick={() => setNextOpen(false)}>Done</button></div>
+              </div>
+            </div>
+          )}
+        </>);
+      })()}
 
       {/* Team counts + cap warning — sticky, ignores search/hide */}
       {(() => {
