@@ -3805,7 +3805,6 @@ function WeekDetailView({ view, tab, histTeams, slots, isAdmin, t, showToast, ge
           <button className="btn btn-sm btn-secondary" onClick={exportWeekCSV}>⬇️ CSV</button>
           <button className="btn btn-sm btn-secondary" onClick={exportExcel}>📊 Export Teams</button>
           <button className="btn btn-sm btn-primary" onClick={() => onSave(weekSlotData, weekAttendance)}>💾 Save</button>
-          {isAdmin && <button className="btn btn-sm btn-danger" onClick={onClear}>🗑️ Clear Week</button>}
         </div>
       </div>
       <h3 style={{ fontWeight: 700, marginBottom: 16 }}>{tab === "canyon" ? "🏔️" : "🏜️"} Battle — {formatDate(view)}</h3>
