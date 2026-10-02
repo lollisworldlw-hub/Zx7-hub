@@ -930,15 +930,29 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
 .team-pills .same-a { font-size: 7.5px; font-weight: 700; margin-left: 1px; vertical-align: super; line-height: 0; }
 @media (max-width: 380px) { .team-sticky { padding-left: 12px !important; padding-right: 12px !important; } }
 .next-battle-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--gold-pale); border: 1px solid var(--gold); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text); }
+.approval-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px 7px 12px; margin-bottom: 12px; font-size: 13px; }
+.members-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.members-tools .form-input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; font-size: 13px; border-radius: 8px; }
+.members-tools .btn-sm { flex-shrink: 0; padding: 6px 9px; font-size: 12px; }
+.members-table { table-layout: fixed; width: 100%; font-size: 12px; }
+.members-table th { padding: 6px 6px; font-size: 10px; cursor: pointer; user-select: none; white-space: nowrap; }
+.members-table th:last-child { cursor: default; }
+.members-table td { padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.members-table .member-name { cursor: pointer; display: block; overflow: hidden; text-overflow: ellipsis; }
+.members-table .member-off { margin-left: 4px; font-size: 9px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 4px; padding: 0 3px; }
+.members-table .member-role { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 1px 0 1px 3px; font-size: 11px; background: var(--surface); color: var(--text); }
+.members-table .member-more { background: none; border: none; font-size: 16px; line-height: 1; padding: 2px 4px; cursor: pointer; color: var(--text-mid); }
 .spots-counter { margin-right: auto; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .team-sticky { position: sticky; top: 60px; z-index: 40; background: var(--bg); margin: 0 -20px 8px; padding: 8px 20px; }
 @media (min-width: 640px) { .team-sticky { margin: 0 -32px 8px; padding: 8px 32px; } }
 .update-banner { position: fixed; left: 12px; right: 12px; bottom: 72px; z-index: 150; background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 600; max-width: 520px; margin: 0 auto; }
 .install-card { background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; box-shadow: var(--glow); }
 .top-bar-user { gap: 4px; flex-shrink: 0; }
-.top-bar-logo { white-space: nowrap; min-width: 0; }
+.top-bar-logo { white-space: nowrap; min-width: 0; overflow: hidden; }
+.top-bar-logo span { overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 420px) { .top-bar { padding: 0 12px; } }
-@media (max-width: 380px) { .top-bar-name { display: none; } .top-bar-logo span { font-size: 18px; letter-spacing: 1px; } }
+@media (max-width: 440px) { .top-bar-name { display: none; } }
+@media (max-width: 380px) { .top-bar-logo span { font-size: 18px; letter-spacing: 1px; } }
 
 `;
 
@@ -4761,7 +4775,7 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
   };
   const [memberSearch, setMemberSearch] = useState("");
   const [showDisabled, setShowDisabled] = useState(false);
-  const [usernameColWidth, setUsernameColWidth] = useState(120);
+  const [actionsFor, setActionsFor] = useState(null); // member whose ⋯ actions are open
   const [memberSort, setMemberSort] = useState("username");
   const [memberSortDir, setMemberSortDir] = useState("asc");
 
@@ -4822,18 +4836,13 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
   return (
     <div>
       {isAdmin && requireApproval !== null && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div className="card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontWeight: 700 }}>🔐 New account approval</div>
-              <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 2 }}>
-                {requireApproval ? "ON — new accounts wait for an R4 or Admin to approve them." : "OFF — new accounts can use the hub right away."}
-              </div>
-            </div>
-            <button className={`btn btn-sm ${requireApproval ? "btn-secondary" : "btn-green"}`} onClick={toggleRequireApproval}>
-              {requireApproval ? "Turn off" : "Turn on"}
-            </button>
-          </div>
+        <div className="approval-row">
+          <span title={requireApproval ? "New accounts wait for an R4 or Admin to approve them" : "New accounts can use the hub right away"}>
+            🔐 New account approval: <strong style={{ color: requireApproval ? "var(--green)" : "var(--text-mid)" }}>{requireApproval ? "ON" : "OFF"}</strong>
+          </span>
+          <button className={`btn btn-sm ${requireApproval ? "btn-secondary" : "btn-green"}`} style={{ padding: "3px 10px", fontSize: 12 }} onClick={toggleRequireApproval}>
+            {requireApproval ? "Turn off" : "Turn on"}
+          </button>
         </div>
       )}
       {pending.length > 0 && (
@@ -4855,63 +4864,65 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
           ))}
         </div>
       )}
-      <div style={{ fontWeight: 700, marginBottom: 10 }}>{t.allMembers} ({filteredMembers.length})</div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <input className="form-input" value={memberSearch} onChange={e => setMemberSearch(e.target.value)} placeholder="🔍 Search by username..." style={{ maxWidth: 240, flex: 1 }} />
-        <button className="btn btn-sm btn-secondary" onClick={() => setShowDisabled(d => !d)} style={{ whiteSpace: "nowrap" }}>{showDisabled ? "Hide disabled" : "Show disabled"}</button>
-        {isAdmin && <button className="btn btn-ghost btn-sm" onClick={exportMembers}>⬇️ Export CSV</button>}
+      <div className="members-tools">
+        <input className="form-input" value={memberSearch} onChange={e => setMemberSearch(e.target.value)} placeholder={`🔍 Search ${filteredMembers.length} members`} aria-label="Search members" />
+        <button className={`btn btn-sm ${showDisabled ? "btn-primary" : "btn-secondary"}`} onClick={() => setShowDisabled(d => !d)} title={showDisabled ? "Hide disabled members" : "Show disabled members"}>{showDisabled ? "🙈 Disabled" : "👁 Disabled"}</button>
+        {isAdmin && <button className="btn btn-sm btn-secondary" onClick={exportMembers} title="Export CSV" aria-label="Export CSV">⬇️</button>}
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="data-table" style={{ fontSize: 12 }}>
-          <thead><tr>
-            <th style={{ cursor: "pointer", position: "sticky", left: 0, background: "var(--surface2)", zIndex: 2, whiteSpace: "nowrap", width: usernameColWidth, minWidth: usernameColWidth, maxWidth: usernameColWidth, userSelect: "none" }} onClick={() => toggleMemberSort("username")}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>Username{sortArrow("username")}</span>
-                <span onMouseDown={e => { e.stopPropagation(); e.preventDefault(); const startX = e.clientX; const startW = usernameColWidth; const onMove = ev => setUsernameColWidth(Math.max(60, Math.min(250, startW + ev.clientX - startX))); const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); }; window.addEventListener("mousemove", onMove); window.addEventListener("mouseup", onUp); }} style={{ cursor: "col-resize", padding: "0 4px 0 8px", color: "var(--border)", fontSize: 14, lineHeight: 1 }}>⋮</span>
-              </div>
-            </th>
-            <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => toggleMemberSort("profession")}>Profession{sortArrow("profession")}</th>
-            <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => toggleMemberSort("power")}>Power{sortArrow("power")}</th>
-            <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => toggleMemberSort("role")}>Role{sortArrow("role")}</th>
-            <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => toggleMemberSort("signupCount")}>Sign-Ups{sortArrow("signupCount")}</th>
-            <th>Actions</th>
-            {isAdmin && <th>ID</th>}
-          </tr></thead>
-          <tbody>
-            {filteredMembers.map((m, i) => {
-              const stripe = i % 2 === 0 ? "transparent" : "var(--surface2)";
-              const stickyBg = i % 2 === 0 ? "var(--surface)" : "var(--surface2)";
-              return (
-              <tr key={m.id} style={{ background: stripe }}>
-                <td className={m.profession === "engineer" ? "name-engineer" : "name-warleader"} style={{ position: "sticky", left: 0, background: stickyBg, zIndex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: usernameColWidth, minWidth: usernameColWidth, maxWidth: usernameColWidth, padding: "5px 10px", opacity: m.disabled ? 0.45 : 1 }}><span style={{cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}} onClick={() => setViewMember && setViewMember(m)}>{m.username}</span>{m.disabled && <span style={{ marginLeft: 5, fontSize: 10, background: "var(--surface2)", color: "var(--text-dim)", borderRadius: 4, padding: "1px 5px", border: "1px solid var(--border)" }}>disabled</span>}</td>
-                <td style={{ padding: "5px 10px" }}>{m.profession === "engineer" ? "🔧 Eng" : "⚔️ WL"}</td>
-                <td style={{ padding: "5px 10px" }}>{formatPower(m.power)}</td>
-                <td style={{ padding: "5px 8px" }}>
-                  {isAdmin ? (
-                    <select style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "2px 4px", fontSize: 11 }}
-                      value={m.role} onChange={e => changeRole(m.id, e.target.value)}>
-                      <option value="member">Member</option>
-                      <option value="r4">R4</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  ) : (
-                    <span className="badge badge-gold" style={{ fontSize: 10 }}>{m.role}</span>
-                  )}
-                </td>
-                <td style={{ textAlign: "center", padding: "5px 10px" }}>{m.signupCount || 0}</td>
-                <td style={{ padding: "4px 8px" }}>
-                  <div className="row" style={{ gap: 4 }}>
-                    <button className="btn btn-sm btn-secondary" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => { setResetModal({ id: m.id, username: m.username }); setTempPw(""); }}>Reset PW</button>
-                    {m.id !== user.id && <button className="btn btn-sm" style={{ padding: "2px 6px", fontSize: 11, background: m.disabled ? "rgba(40,170,100,0.12)" : "var(--gold-pale)", color: m.disabled ? "var(--green)" : "var(--gold)", border: `1px solid ${m.disabled ? "rgba(40,170,100,0.4)" : "var(--gold)"}` }} onClick={() => toggleDisable(m.id, m.disabled)}>{m.disabled ? "Enable" : "Disable"}</button>}
-                    {m.id !== user.id && <button className="btn btn-sm btn-danger" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => deleteMember(m.id)}>Delete</button>}
-                  </div>
-                </td>
-                {isAdmin && <td style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text-dim)", padding: "5px 8px" }}>{m.memberId}</td>}
-              </tr>
-            )})}
-          </tbody>
-        </table>
-      </div>
+      <table className="data-table members-table">
+        <colgroup><col /><col style={{ width: 48 }} /><col style={{ width: 80 }} /><col style={{ width: 32 }} /><col style={{ width: 28 }} /></colgroup>
+        <thead><tr>
+          <th onClick={() => toggleMemberSort("username")}>Player{sortArrow("username")}</th>
+          <th onClick={() => toggleMemberSort("power")}>Pwr{sortArrow("power")}</th>
+          <th onClick={() => toggleMemberSort("role")}>Role{sortArrow("role")}</th>
+          <th onClick={() => toggleMemberSort("signupCount")} title="Storm sign-ups">SU{sortArrow("signupCount")}</th>
+          <th aria-label="Actions"></th>
+        </tr></thead>
+        <tbody>
+          {filteredMembers.map((m, i) => (
+            <tr key={m.id} style={{ background: i % 2 === 0 ? "transparent" : "var(--surface2)", opacity: m.disabled ? 0.5 : 1 }}>
+              <td className={m.profession === "engineer" ? "name-engineer" : "name-warleader"}>
+                <span className="member-name" onClick={() => setViewMember && setViewMember(m)}>
+                  <span aria-hidden="true">{m.profession === "engineer" ? "🔧" : "⚔️"}</span> {m.username}{m.disabled && <span className="member-off">off</span>}
+                </span>
+              </td>
+              <td>{m.power ? (m.power / 1000000).toFixed(1) + "M" : "—"}</td>
+              <td>
+                {isAdmin ? (
+                  <select className="member-role" value={m.role} onChange={e => changeRole(m.id, e.target.value)} aria-label={`Role for ${m.username}`}>
+                    <option value="member">Member</option>
+                    <option value="r4">R4</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                ) : <span className="badge badge-gold" style={{ fontSize: 10, padding: "2px 6px" }}>{m.role}</span>}
+              </td>
+              <td style={{ textAlign: "center" }}>{m.signupCount || 0}</td>
+              <td style={{ textAlign: "center" }}>
+                <button type="button" className="member-more" onClick={() => setActionsFor(m)} aria-label={`Actions for ${m.username}`}>⋯</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Member actions */}
+      {actionsFor && (
+        <div className="modal-overlay" onClick={() => setActionsFor(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 340 }}>
+            <div className="modal-header">
+              <div className="modal-title">{actionsFor.username}</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setActionsFor(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="modal-body stack" style={{ gap: 8 }}>
+              {isAdmin && <div className="form-hint" style={{ margin: 0 }}>Member ID: <span style={{ fontFamily: "monospace" }}>{actionsFor.memberId}</span></div>}
+              <button className="btn btn-secondary btn-full" onClick={() => { setViewMember && setViewMember(actionsFor); setActionsFor(null); }}>👤 View profile</button>
+              <button className="btn btn-secondary btn-full" onClick={() => { setResetModal({ id: actionsFor.id, username: actionsFor.username }); setTempPw(""); setActionsFor(null); }}>🔑 Reset password</button>
+              {actionsFor.id !== user.id && <button className="btn btn-secondary btn-full" onClick={() => { toggleDisable(actionsFor.id, actionsFor.disabled); setActionsFor(null); }}>{actionsFor.disabled ? "▶️ Enable member" : "⏸ Disable member"}</button>}
+              {actionsFor.id !== user.id && <button className="btn btn-danger btn-full" onClick={() => { if (window.confirm(`Delete ${actionsFor.username}? This can't be undone.`)) { deleteMember(actionsFor.id); setActionsFor(null); } }}>🗑️ Delete member</button>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Reset Password Modal */}
       {resetModal && (
