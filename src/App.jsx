@@ -2521,6 +2521,7 @@ function AdminPage({ buddyRequests, setBuddyRequests, setViewMember, csAllSignup
     ["members", "👥 Members", pending.length > 0],
     ["buddy", "🤝 Buddy", (buddyRequests || []).length > 0],
     ["trains", "🚂 Trains", false],
+    ["news", "📣 News", false],
     ...(isAdmin ? [["data", "📊 Data", false]] : []),
   ];
   return (
@@ -2540,6 +2541,7 @@ function AdminPage({ buddyRequests, setBuddyRequests, setViewMember, csAllSignup
       {tab === "members" && <AdminMembers setViewMember={setViewMember} members={members} setMembers={setMembers} t={t} showToast={showToast} isAdmin={isAdmin} user={user} />}
       {tab === "buddy" && <AdminBuddy members={members} setMembers={setMembers} buddyRequests={buddyRequests || []} setBuddyRequests={setBuddyRequests} t={t} showToast={showToast} />}
       {tab === "trains" && <AdminTrains trains={trains} trainGoals={trainGoals} members={members} showToast={showToast} />}
+      {tab === "news" && <AdminNews showToast={showToast} />}
       {tab === "data" && isAdmin && <AdminData members={members} setMembers={setMembers} csSignups={csAllSignups} dsSignups={dsAllSignups} t={t} showToast={showToast} />}
     </div>
   );
@@ -5211,6 +5213,262 @@ function TrainsPage({ user, trains, trainGoals, members }) {
 }
 
 // ─── ADMIN TRAINS ─────────────────────────────────────────────────────────────
+// ─── DAILY NEWS HELPER (R4/admin) ─────────────────────────────────────────────
+// Builds the daily alliance post. Everything runs on game server days.
+// Rotations (worked out from the A/B/C templates):
+//   • Week letter: A → B → C, changes every Monday.
+//   • Shiny servers: 3 lists, one step per day, never resets (so the list for a weekday changes each week).
+//   • 16ST event: Zombie Siege → Marshall → free day, one step per day.
+// Shared settings live in app_settings key "news_config"; "Fix" buttons shift a rotation if the game moves it.
+const NEWS_ANCHOR = "2026-09-21"; // a Monday of a Week A (Week A Mon = shiny list 3, free 16ST day)
+const NEWS_DAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+const NEWS_DEFAULT_CONFIG = {
+  weekShift: 0, shinyShift: 0, siegeShift: 0,
+  shiny: [
+    "721 (4ST)\n779\n780-1-2-3\n788-9\n791-2\n798-9\n800",
+    "773 (4ST)\n774-5-6\n784-5\n793-4\n801-2-3",
+    "777-8\n786-7\n795-6-7\n804",
+  ],
+  items: {}, // saved wording/time overrides: { [id]: { label, time } }
+};
+const VS_PRESETS = ["7.2 + Full Stop", "7.2 + Save", "Push", "Save week", "Smart week", "Game over", "Check email"];
+// id, default label, default time, when it's ticked by default
+const NEWS_ITEMS = [
+  { id: "rewards", label: "Last War Store — check in & claim all free rewards", on: c => c.dow === 1 },
+  { id: "zs", label: "Zombie Siege", time: "16:00", on: c => c.siege === "zs" },
+  { id: "marshall", label: "Marshall", time: "16:00", on: c => c.siege === "marshall" },
+  { id: "canyon", label: "Canyon Storm (CS)", time: "12:00 & 23:00", on: c => c.dow === 4 },
+  { id: "dsA", label: "DS A — join Discord voice", time: "18:00", on: c => c.dow === 5 },
+  { id: "dsB", label: "DS B — join Discord voice", time: "23:00", on: c => c.dow === 5 },
+  { id: "meteor", label: "Meteor event", time: "12:30", on: c => c.dow === 6 && c.week !== "B" },
+  { id: "regBoth", label: "Register for DS & CS (HUB)", on: c => [6, 0, 1].includes(c.dow) },
+  { id: "regDS", label: "Register for DS (HUB)", on: c => [2, 3].includes(c.dow) },
+  { id: "vs", label: "VS", on: c => c.dow >= 1 && c.dow <= 5 },
+  { id: "shields", label: "SHIELDS — unless you fight!", on: c => c.dow === 5 },
+  { id: "ghost", label: "Ghost Ops — don't join UR missions in exchange for alliance points, let others get rewards", on: c => c.dow === 4 },
+  { id: "legUse", label: "Use legendary secret task", on: c => c.dow === 2 },
+  { id: "legSave", label: "Save legendary secret task", on: c => c.dow === 5 },
+  { id: "tech", label: "Donate tech 2x30 per day", on: () => true },
+  { id: "mining", label: "Mining in the evening", on: c => c.dow === 0 },
+];
+const nMod = (n, m) => ((n % m) + m) % m;
+const newsDayIdx = (dateStr) => Math.round((Date.parse(dateStr + "T00:00:00Z") - Date.parse(NEWS_ANCHOR + "T00:00:00Z")) / 86400000);
+const newsAddDays = (dateStr, n) => new Date(Date.parse(dateStr + "T00:00:00Z") + n * 86400000).toISOString().split("T")[0];
+function newsContext(dateStr, cfg) {
+  const d = newsDayIdx(dateStr);
+  const week = "ABC"[nMod(Math.floor(d / 7) + (cfg.weekShift || 0), 3)];
+  const shinyIdx = nMod(d + 2 + (cfg.shinyShift || 0), 3);
+  const siege = ["free", "zs", "marshall"][nMod(d + (cfg.siegeShift || 0), 3)];
+  const dow = new Date(dateStr + "T00:00:00Z").getUTCDay();
+  return { d, week, shinyIdx, siege, dow };
+}
+// "16:00" → "16ST", "12:30" → "12:30ST", "12:00 & 23:00" → "12ST & 23ST"
+const fmtST = (t) => (t || "").replace(/(\d{1,2}):(\d{2})/g, (_, h, m) => (m === "00" ? `${+h}ST` : `${+h}:${m}ST`));
+const firstMinutes = (t) => { const m = /(\d{1,2}):(\d{2})/.exec(t || ""); return m ? +m[1] * 60 + +m[2] : null; };
+
+function AdminNews({ showToast }) {
+  const [cfg, setCfg] = useState(NEWS_DEFAULT_CONFIG);
+  const [date, setDate] = useState(serverToday());
+  const [draft, setDraft] = useState(null);
+  const [manual, setManual] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [shinyEdit, setShinyEdit] = useState(null);
+
+  useEffect(() => {
+    supabase.from("app_settings").select("value").eq("key", "news_config").maybeSingle().then(({ data }) => {
+      if (data?.value) { try { setCfg({ ...NEWS_DEFAULT_CONFIG, ...JSON.parse(data.value) }); } catch {} }
+    });
+  }, []);
+
+  const saveCfg = async (patch, msg) => {
+    const next = { ...cfg, ...patch };
+    // A rotation fix changes what each day should default to, so drop drafts saved on this device
+    if (["weekShift", "siegeShift", "shinyShift"].some(k => k in patch)) {
+      try { Object.keys(localStorage).filter(k => k.startsWith("zx7_news_")).forEach(k => localStorage.removeItem(k)); } catch {}
+    }
+    setCfg(next);
+    const { error } = await supabase.from("app_settings").upsert({ key: "news_config", value: JSON.stringify(next), updated_at: new Date().toISOString() }, { onConflict: "key" });
+    showToast(error ? "⚠️ Didn't save — please try again." : (msg || "Saved ✓"));
+  };
+
+  const ctx = newsContext(date, cfg);
+
+  // Fresh draft for the chosen day (or the one saved on this device)
+  const freshDraft = () => ({
+    checked: Object.fromEntries(NEWS_ITEMS.map(it => [it.id, !!it.on(ctx)])),
+    labels: Object.fromEntries(NEWS_ITEMS.map(it => [it.id, cfg.items?.[it.id]?.label ?? it.label])),
+    times: Object.fromEntries(NEWS_ITEMS.filter(it => it.time).map(it => [it.id, cfg.items?.[it.id]?.time ?? it.time])),
+    vs: "", top: "", custom: [], shiny: true,
+  });
+  useEffect(() => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(`zx7_news_${date}`) || "null"); } catch {}
+    setDraft(saved || freshDraft());
+    setManual(null);
+    // eslint-disable-next-line
+  }, [date, cfg]);
+  useEffect(() => {
+    if (!draft) return;
+    try { localStorage.setItem(`zx7_news_${date}`, JSON.stringify(draft)); } catch {}
+  }, [draft]);
+
+  if (!draft) return null;
+  const upd = (fn) => { setDraft(d => fn({ ...d })); setManual(null); };
+  const setField = (field, id, value) => upd(d => ({ ...d, [field]: { ...d[field], [id]: value } }));
+
+  // Build the post
+  const lines = [];
+  NEWS_ITEMS.forEach((it, order) => {
+    if (!draft.checked[it.id]) return;
+    let text = draft.labels[it.id] || it.label;
+    if (it.id === "vs") text = draft.vs.trim() ? `VS - ${draft.vs.trim()}` : "VS";
+    const time = draft.times[it.id];
+    lines.push({ text: time ? `${fmtST(time)} - ${text}` : text, mins: firstMinutes(time), order });
+  });
+  draft.custom.forEach((c, i) => { if (c.text.trim()) lines.push({ text: c.time ? `${fmtST(c.time)} - ${c.text.trim()}` : c.text.trim(), mins: firstMinutes(c.time), order: 100 + i }); });
+  lines.sort((a, b) => (a.mins == null) - (b.mins == null) || (a.mins ?? 0) - (b.mins ?? 0) || a.order - b.order);
+  const shinyText = (cfg.shiny[ctx.shinyIdx] || "").trim();
+  const generated = [
+    `BREAKING NEWS! ${ctx.week} — ${NEWS_DAYS[ctx.dow]}`,
+    ...(draft.top.trim() ? ["", draft.top.trim()] : []),
+    "",
+    ...lines.map((l, i) => `${i + 1}. ${l.text}`),
+    ...(draft.shiny && shinyText ? ["", "SHINY:", shinyText] : []),
+  ].join("\n");
+  const output = manual ?? generated;
+
+  const copy = () => {
+    const done = () => showToast("Copied! Paste it in alliance chat 📋");
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(output).then(done).catch(() => showToast("Couldn't copy — select the text and copy it."));
+    else showToast("Couldn't copy — select the text and copy it.");
+  };
+
+  const today = serverToday();
+  const dayLabel = date === today ? "Today" : date === newsAddDays(today, 1) ? "Tomorrow" : date === newsAddDays(today, -1) ? "Yesterday" : date;
+  const siegeLabel = { zs: "16ST Zombie Siege", marshall: "16ST Marshall", free: "No 16ST event" };
+  const rowStyle = { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)" };
+
+  return (
+    <div>
+      {/* Day picker */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-body" style={{ padding: 14 }}>
+          <div className="row-between">
+            <button className="btn btn-sm btn-secondary" onClick={() => setDate(newsAddDays(date, -1))} aria-label="Previous day">◀</button>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{NEWS_DAYS[ctx.dow]} · Week {ctx.week}</div>
+              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{dayLabel} (server time) · {siegeLabel[ctx.siege]} · Shiny list {ctx.shinyIdx + 1}</div>
+            </div>
+            <button className="btn btn-sm btn-secondary" onClick={() => setDate(newsAddDays(date, 1))} aria-label="Next day">▶</button>
+          </div>
+          {date !== today && <button className="btn btn-sm btn-secondary btn-full" style={{ marginTop: 10 }} onClick={() => setDate(today)}>Back to today</button>}
+        </div>
+      </div>
+
+      {/* Checklist */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-header"><div className="card-title">✅ What's on</div>
+          <button className="btn btn-sm btn-secondary" onClick={() => { try { localStorage.removeItem(`zx7_news_${date}`); } catch {} setDraft(freshDraft()); setManual(null); }}>Reset day</button>
+        </div>
+        <div className="card-body" style={{ paddingTop: 6 }}>
+          <div className="form-group" style={{ marginBottom: 6 }}>
+            <label className="form-label">Top message (optional)</label>
+            <textarea className="form-input" rows={2} placeholder="e.g. VOTE IN THE POLL AS SOON AS POSSIBLE" value={draft.top} onChange={e => upd(d => ({ ...d, top: e.target.value }))} />
+          </div>
+          {NEWS_ITEMS.map(it => (
+            <div key={it.id} style={{ ...rowStyle, flexWrap: "wrap", opacity: draft.checked[it.id] ? 1 : 0.55 }}>
+              <input type="checkbox" checked={!!draft.checked[it.id]} onChange={e => setField("checked", it.id, e.target.checked)} style={{ width: 20, height: 20, flexShrink: 0, accentColor: "var(--gold)" }} aria-label={it.label} />
+              {it.time && <input className="form-input" style={{ width: 118, padding: "7px 8px", fontSize: 14 }} value={draft.times[it.id] || ""} onChange={e => setField("times", it.id, e.target.value)} placeholder="16:00" aria-label="Time (server)" />}
+              {it.id === "vs"
+                ? <div style={{ flex: 1, minWidth: 180 }}>
+                    <input className="form-input" style={{ padding: "7px 10px", fontSize: 14 }} value={draft.vs} onChange={e => upd(d => ({ ...d, vs: e.target.value, checked: { ...d.checked, vs: true } }))} placeholder="VS - …" />
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
+                      {VS_PRESETS.map(p => <button key={p} className={`sort-chip ${draft.vs === p ? "active" : ""}`} style={{ padding: "3px 9px", fontSize: 12 }} onClick={() => upd(d => ({ ...d, vs: p, checked: { ...d.checked, vs: true } }))}>{p}</button>)}
+                    </div>
+                  </div>
+                : <input className="form-input" style={{ flex: 1, minWidth: 180, padding: "7px 10px", fontSize: 14 }} value={draft.labels[it.id] || ""} onChange={e => setField("labels", it.id, e.target.value)} />}
+            </div>
+          ))}
+          {draft.custom.map((c, i) => (
+            <div key={i} style={{ ...rowStyle, flexWrap: "wrap" }}>
+              <span style={{ width: 20, textAlign: "center" }}>✏️</span>
+              <input className="form-input" style={{ width: 118, padding: "7px 8px", fontSize: 14 }} value={c.time} placeholder="time (opt.)" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, time: e.target.value } : x) }))} />
+              <input className="form-input" style={{ flex: 1, minWidth: 180, padding: "7px 10px", fontSize: 14 }} value={c.text} placeholder="Your own line" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, text: e.target.value } : x) }))} />
+              <button className="btn btn-sm btn-secondary" onClick={() => upd(d => ({ ...d, custom: d.custom.filter((_, j) => j !== i) }))} aria-label="Remove line">✕</button>
+            </div>
+          ))}
+          <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+            <button className="btn btn-sm btn-secondary" onClick={() => upd(d => ({ ...d, custom: [...d.custom, { time: "", text: "" }] }))}>➕ Add line</button>
+            <label className="row" style={{ gap: 6, fontSize: 14, cursor: "pointer" }}>
+              <input type="checkbox" checked={draft.shiny} onChange={e => upd(d => ({ ...d, shiny: e.target.checked }))} style={{ width: 18, height: 18, accentColor: "var(--gold)" }} /> Include shiny list
+            </label>
+            <button className="btn btn-sm btn-secondary" style={{ marginLeft: "auto" }} onClick={() => saveCfg({ items: Object.fromEntries(NEWS_ITEMS.map(it => [it.id, { label: draft.labels[it.id], ...(it.time ? { time: draft.times[it.id] } : {}) }])) }, "Wording saved as default ✓")}>💾 Save wording as default</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Output */}
+      <div className="card" style={{ marginBottom: 14, borderColor: "var(--gold)" }}>
+        <div className="card-header"><div className="card-title">📣 Alliance post</div>
+          {manual != null && <button className="btn btn-sm btn-secondary" onClick={() => setManual(null)}>Undo my edits</button>}
+        </div>
+        <div className="card-body">
+          <textarea className="form-input" rows={Math.min(24, output.split("\n").length + 1)} value={output} onChange={e => setManual(e.target.value)} style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 14, lineHeight: 1.45 }} aria-label="Alliance post" />
+          <div className="form-hint">You can tweak the text here before copying. Times are server time.</div>
+          <button className="btn btn-primary btn-full" style={{ marginTop: 12 }} onClick={copy}>📋 Copy post</button>
+        </div>
+      </div>
+
+      {/* Rotation settings */}
+      <div className="card">
+        <div className="card-header" style={{ cursor: "pointer" }} onClick={() => setShowSettings(s => !s)}>
+          <div className="card-title">⚙️ Rotations & shiny lists</div><span>{showSettings ? "▲" : "▼"}</span>
+        </div>
+        {showSettings && <div className="card-body">
+          <div className="form-label">Next 7 days</div>
+          <div style={{ overflowX: "auto", marginBottom: 16 }}>
+            <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+              <tbody>
+                {Array.from({ length: 7 }, (_, i) => { const ds = newsAddDays(today, i); const c = newsContext(ds, cfg); return (
+                  <tr key={ds} style={{ borderBottom: "1px solid var(--border)", fontWeight: ds === date ? 700 : 400 }}>
+                    <td style={{ padding: "5px 4px" }}>{NEWS_DAYS[c.dow].slice(0, 3)}</td><td>Week {c.week}</td><td>{siegeLabel[c.siege]}</td><td>Shiny {c.shinyIdx + 1}</td>
+                  </tr>); })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="form-label">Something off? Set what the shown day ({NEWS_DAYS[ctx.dow]}) should be:</div>
+          <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}><span style={{ width: 70, fontSize: 13 }}>Week</span>
+              {["A", "B", "C"].map((L, i) => <button key={L} className={`sort-chip ${ctx.week === L ? "active" : ""}`} onClick={() => saveCfg({ weekShift: nMod((cfg.weekShift || 0) + i - "ABC".indexOf(ctx.week), 3) }, `Week fixed → ${L} ✓`)}>{L}</button>)}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}><span style={{ width: 70, fontSize: 13 }}>16ST</span>
+              {["free", "zs", "marshall"].map((s, i) => <button key={s} className={`sort-chip ${ctx.siege === s ? "active" : ""}`} onClick={() => saveCfg({ siegeShift: nMod((cfg.siegeShift || 0) + i - ["free", "zs", "marshall"].indexOf(ctx.siege), 3) }, "16ST rotation fixed ✓")}>{{ free: "Free", zs: "Zombie Siege", marshall: "Marshall" }[s]}</button>)}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}><span style={{ width: 70, fontSize: 13 }}>Shiny</span>
+              {[0, 1, 2].map(i => <button key={i} className={`sort-chip ${ctx.shinyIdx === i ? "active" : ""}`} onClick={() => saveCfg({ shinyShift: nMod((cfg.shinyShift || 0) + i - ctx.shinyIdx, 3) }, `Shiny fixed → list ${i + 1} ✓`)}>List {i + 1}</button>)}
+            </div>
+          </div>
+
+          <div className="form-label">Shiny lists (rotate 1 → 2 → 3, one step a day)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+            {[0, 1, 2].map(i => (
+              <div key={i}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: ctx.shinyIdx === i ? "var(--gold)" : "var(--text-mid)" }}>List {i + 1}{ctx.shinyIdx === i ? " (shown day)" : ""}</div>
+                <textarea className="form-input" rows={8} style={{ fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }} value={(shinyEdit || cfg.shiny)[i]} onChange={e => { const arr = [...(shinyEdit || cfg.shiny)]; arr[i] = e.target.value; setShinyEdit(arr); }} />
+              </div>
+            ))}
+          </div>
+          {shinyEdit && <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn btn-sm btn-primary" onClick={() => { saveCfg({ shiny: shinyEdit }, "Shiny lists saved ✓"); setShinyEdit(null); }}>💾 Save shiny lists</button>
+            <button className="btn btn-sm btn-secondary" onClick={() => setShinyEdit(null)}>Cancel</button>
+          </div>}
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 function AdminTrains({ trains, trainGoals, members, showToast }) {
   const [tab, setTab] = useState("schedule");
   const [editTrain, setEditTrain] = useState(null);
