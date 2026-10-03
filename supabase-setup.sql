@@ -164,7 +164,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['members','canyon_signups','desert_signups','storm_settings',
-                           'events','trains','train_goals','app_settings']
+                           'events','trains','train_goals','app_settings','battle_teams']
   loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
