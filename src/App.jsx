@@ -5329,7 +5329,7 @@ function AdminNews({ showToast }) {
   lines.sort((a, b) => (a.mins == null) - (b.mins == null) || (a.mins ?? 0) - (b.mins ?? 0) || a.order - b.order);
   const shinyText = (cfg.shiny[ctx.shinyIdx] || "").trim();
   const generated = [
-    `BREAKING NEWS! ${ctx.week} — ${NEWS_DAYS[ctx.dow]}`,
+    `DAILY NEWS — ${NEWS_DAYS[ctx.dow]}`,
     ...(draft.top.trim() ? ["", draft.top.trim()] : []),
     "",
     ...lines.map((l, i) => `${i + 1}. ${l.text}`),
