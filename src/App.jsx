@@ -5376,24 +5376,24 @@ function AdminNews({ showToast }) {
             <textarea className="form-input" rows={2} placeholder="e.g. VOTE IN THE POLL AS SOON AS POSSIBLE" value={draft.top} onChange={e => upd(d => ({ ...d, top: e.target.value }))} />
           </div>
           {NEWS_ITEMS.map(it => (
-            <div key={it.id} style={{ ...rowStyle, flexWrap: "wrap", opacity: draft.checked[it.id] ? 1 : 0.55 }}>
+            <div key={it.id} style={{ ...rowStyle, opacity: draft.checked[it.id] ? 1 : 0.55 }}>
               <input type="checkbox" checked={!!draft.checked[it.id]} onChange={e => setField("checked", it.id, e.target.checked)} style={{ width: 20, height: 20, flexShrink: 0, accentColor: "var(--gold)" }} aria-label={it.label} />
-              {it.time && <input className="form-input" style={{ width: 118, padding: "7px 8px", fontSize: 14 }} value={draft.times[it.id] || ""} onChange={e => setField("times", it.id, e.target.value)} placeholder="16:00" aria-label="Time (server)" />}
+              {it.time && <input className="form-input" style={{ width: it.id === "canyon" ? 104 : 64, flexShrink: 0, padding: "7px 6px", fontSize: 13, textAlign: "center" }} value={draft.times[it.id] || ""} onChange={e => setField("times", it.id, e.target.value)} placeholder="16:00" aria-label="Time (server)" />}
               {it.id === "vs"
-                ? <div style={{ flex: 1, minWidth: 180 }}>
+                ? <div style={{ flex: 1, minWidth: 0 }}>
                     <input className="form-input" style={{ padding: "7px 10px", fontSize: 14 }} value={draft.vs} onChange={e => upd(d => ({ ...d, vs: e.target.value, checked: { ...d.checked, vs: true } }))} placeholder="VS - …" />
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6 }}>
                       {VS_PRESETS.map(p => <button key={p} className={`sort-chip ${draft.vs === p ? "active" : ""}`} style={{ padding: "3px 9px", fontSize: 12 }} onClick={() => upd(d => ({ ...d, vs: p, checked: { ...d.checked, vs: true } }))}>{p}</button>)}
                     </div>
                   </div>
-                : <input className="form-input" style={{ flex: 1, minWidth: 180, padding: "7px 10px", fontSize: 14 }} value={draft.labels[it.id] || ""} onChange={e => setField("labels", it.id, e.target.value)} />}
+                : <input className="form-input" style={{ flex: 1, minWidth: 0, padding: "7px 10px", fontSize: 14 }} value={draft.labels[it.id] || ""} onChange={e => setField("labels", it.id, e.target.value)} />}
             </div>
           ))}
           {draft.custom.map((c, i) => (
-            <div key={i} style={{ ...rowStyle, flexWrap: "wrap" }}>
+            <div key={i} style={rowStyle}>
               <span style={{ width: 20, textAlign: "center" }}>✏️</span>
-              <input className="form-input" style={{ width: 118, padding: "7px 8px", fontSize: 14 }} value={c.time} placeholder="time (opt.)" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, time: e.target.value } : x) }))} />
-              <input className="form-input" style={{ flex: 1, minWidth: 180, padding: "7px 10px", fontSize: 14 }} value={c.text} placeholder="Your own line" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, text: e.target.value } : x) }))} />
+              <input className="form-input" style={{ width: 64, flexShrink: 0, padding: "7px 6px", fontSize: 13, textAlign: "center" }} value={c.time} placeholder="time" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, time: e.target.value } : x) }))} />
+              <input className="form-input" style={{ flex: 1, minWidth: 0, padding: "7px 10px", fontSize: 14 }} value={c.text} placeholder="Your own line" onChange={e => upd(d => ({ ...d, custom: d.custom.map((x, j) => j === i ? { ...x, text: e.target.value } : x) }))} />
               <button className="btn btn-sm btn-secondary" onClick={() => upd(d => ({ ...d, custom: d.custom.filter((_, j) => j !== i) }))} aria-label="Remove line">✕</button>
             </div>
           ))}
