@@ -4873,15 +4873,51 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
 
   const sortArrow = (col) => memberSort === col ? (memberSortDir === "asc" ? " ↑" : " ↓") : " ↕";
 
-  const exportMembers = () => {
-    const header = "Username,Profession,Power,Role,Join Date,Signup Count\n";
-    const rows = filteredMembers.map(m =>
-      `${m.username},${m.profession},${m.power || 0},${m.role},${m.joinDate || ""},${m.signupCount || 0}`
-    ).join("\n");
-    const blob = new Blob([header + rows], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const el = document.createElement("a"); el.href = url; el.download = `members-${serverToday()}.csv`; el.click();
-    showToast("Members exported!");
+  // Excel export of ALL members (active, disabled and pending) — R4 + Admin
+  const [exporting, setExporting] = useState(false);
+  const exportMembers = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      if (!window.XLSX) {
+        await new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        });
+      }
+      const XLSX = window.XLSX;
+      const byId = new Map(members.map(m => [String(m.id), m]));
+      const status = (m) => !m.approved ? "Pending" : m.disabled ? "Disabled" : "Active";
+      const statusOrder = { Active: 0, Disabled: 1, Pending: 2 };
+      const roleLabel = { admin: "Admin", r4: "R4", member: "Member" };
+      const rows = [...members]
+        .sort((a, b) => (statusOrder[status(a)] - statusOrder[status(b)]) || a.username.localeCompare(b.username, undefined, { sensitivity: "base" }))
+        .map(m => ({
+          "Username": m.username,
+          "Status": status(m),
+          "Role": roleLabel[m.role] || m.role || "",
+          "Profession": m.profession === "engineer" ? "Engineer" : "War Leader",
+          "Power (M)": m.power ? Math.round(m.power / 100000) / 10 : 0,
+          "Buddy": m.buddy ? (byId.get(String(m.buddy))?.username || "") : "",
+          "Storm Sign-ups": m.signupCount || 0,
+          "Attendance": m.attendanceCount || 0,
+          "Language": m.language || "",
+          "Join Date": m.joinDate ? String(m.joinDate).slice(0, 10) : "",
+        }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 22 }, { wch: 10 }, { wch: 9 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 11 }, { wch: 10 }, { wch: 12 }];
+      ws["!autofilter"] = { ref: ws["!ref"] };
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Members");
+      XLSX.writeFile(wb, `zx7-members-${serverToday()}.xlsx`);
+      showToast(`Exported ${rows.length} members 📊`);
+    } catch (e) {
+      showToast("⚠️ Export failed — check your connection and try again.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const doReset = () => {
@@ -4939,7 +4975,7 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
       <div className="members-tools">
         <input className="form-input" value={memberSearch} onChange={e => setMemberSearch(e.target.value)} placeholder={`🔍 Search ${filteredMembers.length} members`} aria-label="Search members" />
         <button className={`btn btn-sm ${showDisabled ? "btn-primary" : "btn-secondary"}`} onClick={() => setShowDisabled(d => !d)} title={showDisabled ? "Hide disabled members" : "Show disabled members"}>{showDisabled ? "🙈 Disabled" : "👁 Disabled"}</button>
-        {isAdmin && <button className="btn btn-sm btn-secondary" onClick={exportMembers} title="Export CSV" aria-label="Export CSV">⬇️</button>}
+        <button className="btn btn-sm btn-secondary" onClick={exportMembers} disabled={exporting} title="Export all members to Excel" aria-label="Export all members to Excel">{exporting ? "⏳" : "📊"}</button>
       </div>
       <table className="data-table members-table">
         <colgroup><col /><col style={{ width: 48 }} /><col style={{ width: 80 }} /><col style={{ width: 32 }} /><col style={{ width: 28 }} /></colgroup>
