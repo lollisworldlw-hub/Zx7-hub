@@ -502,6 +502,16 @@ const serverNow = () => new Date(Date.now() - SERVER_UTC_OFFSET_HOURS * 3600000)
 // Today's date on the server, "YYYY-MM-DD"
 const serverToday = () => serverNow().toISOString().split("T")[0];
 
+// Storm sign-ups can be for a non-member ("guest"), typed in by R4/admin.
+// In the app a guest's id is "g:<name>"; in the database member_id is null and guest_name holds the name.
+const GUEST_PREFIX = "g:";
+const isGuestId = (id) => String(id ?? "").startsWith(GUEST_PREFIX);
+const guestNameOf = (id) => String(id).slice(GUEST_PREFIX.length);
+const signupRowId = (row) => row.member_id != null ? row.member_id : `${GUEST_PREFIX}${row.guest_name}`;
+const sameSignupId = (a, b) => isGuestId(a) || isGuestId(b)
+  ? String(a).toLowerCase() === String(b).toLowerCase()
+  : String(a) === String(b);
+
 // Returns the NEXT upcoming battle date key — always forward-looking.
 // Canyon battle = Thursday, Desert battle = Friday.
 // On the battle day itself (e.g. Thursday for Canyon), stays on today.
@@ -1256,7 +1266,7 @@ export default function App() {
   });
 
   const mapSignup = (s) => ({
-    userId: s.member_id, power: s.power, squadType: s.squad_type,
+    userId: signupRowId(s), guest: s.member_id == null, power: s.power, squadType: s.squad_type,
     availability: s.availability, timePreference: s.time_preference, canFlexTime: s.can_flex_time || "", week: s.week_start,
   });
 
@@ -1269,7 +1279,7 @@ export default function App() {
   const dedupeLiveWeeks = (rows, type) => {
     const seen = new Set();
     return (rows || []).filter(s => isLiveSignupWeek(type, s.week_start))
-      .filter(s => { const k = `${s.member_id}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .filter(s => { const k = `${String(signupRowId(s)).toLowerCase()}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
       .map(mapSignup);
   };
 
@@ -1316,14 +1326,14 @@ export default function App() {
       if (csAllData) {
         const seen = new Set();
         setCsAllSignups(csAllData
-          .filter(s => { const k = `${s.member_id}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
-          .map(s => ({ userId: s.member_id, week: s.week_start })));
+          .filter(s => { const k = `${signupRowId(s)}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
+          .map(s => ({ userId: signupRowId(s), week: s.week_start })));
       }
       if (dsAllData) {
         const seen = new Set();
         setDsAllSignups(dsAllData
-          .filter(s => { const k = `${s.member_id}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
-          .map(s => ({ userId: s.member_id, week: s.week_start, power: s.power || 0, squadType: s.squad_type || "" })));
+          .filter(s => { const k = `${signupRowId(s)}:${s.week_start}`; if (seen.has(k)) return false; seen.add(k); return true; })
+          .map(s => ({ userId: signupRowId(s), week: s.week_start, power: s.power || 0, squadType: s.squad_type || "" })));
       }
 
       if (teamsData) {
@@ -1400,9 +1410,9 @@ export default function App() {
           if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
             const wk = payload.new.week_start;
             if (!isLiveSignupWeek("canyon", wk)) return;
-            setCsSignupsState(prev => [...prev.filter(s => !(String(s.userId) === String(payload.new.member_id) && s.week === wk)), mapSignup(payload.new)]);
+            setCsSignupsState(prev => [...prev.filter(s => !(sameSignupId(s.userId, signupRowId(payload.new)) && s.week === wk)), mapSignup(payload.new)]);
           }
-          if (payload.eventType === "DELETE") setCsSignupsState(prev => prev.filter(s => !(String(s.userId) === String(payload.old.member_id) && s.week === payload.old.week_start)));
+          if (payload.eventType === "DELETE") setCsSignupsState(prev => prev.filter(s => !(sameSignupId(s.userId, signupRowId(payload.old)) && s.week === payload.old.week_start)));
         }).subscribe(),
 
       supabase.channel("desert-signups-changes")
@@ -1410,9 +1420,9 @@ export default function App() {
           if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
             const wk = payload.new.week_start;
             if (!isLiveSignupWeek("desert", wk)) return;
-            setDsSignupsState(prev => [...prev.filter(s => !(String(s.userId) === String(payload.new.member_id) && s.week === wk)), mapSignup(payload.new)]);
+            setDsSignupsState(prev => [...prev.filter(s => !(sameSignupId(s.userId, signupRowId(payload.new)) && s.week === wk)), mapSignup(payload.new)]);
           }
-          if (payload.eventType === "DELETE") setDsSignupsState(prev => prev.filter(s => !(String(s.userId) === String(payload.old.member_id) && s.week === payload.old.week_start)));
+          if (payload.eventType === "DELETE") setDsSignupsState(prev => prev.filter(s => !(sameSignupId(s.userId, signupRowId(payload.old)) && s.week === payload.old.week_start)));
         }).subscribe(),
 
       supabase.channel("battle-teams-changes")
@@ -1613,9 +1623,25 @@ export default function App() {
     setState(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       next.forEach(async (s) => {
-        const old = prev.find(p => String(p.userId) === String(s.userId) && p.week === s.week);
+        const old = prev.find(p => sameSignupId(p.userId, s.userId) && p.week === s.week);
         const changed = !old || old.power !== s.power || old.squadType !== s.squadType || old.availability !== s.availability || old.timePreference !== s.timePreference || old.canFlexTime !== s.canFlexTime;
         if (!changed) return;
+        if (isGuestId(s.userId)) {
+          // Non-member: no member row, so update-or-insert by name + week
+          const name = guestNameOf(s.userId);
+          const fields = {
+            power: s.power, squad_type: s.squadType, availability: s.availability,
+            time_preference: s.timePreference, can_flex_time: s.canFlexTime || null, updated_at: new Date(),
+          };
+          const { data: upd, error: updErr } = await supabase.from(table).update(fields)
+            .is("member_id", null).ilike("guest_name", name.replace(/[\\%_]/g, m => "\\" + m)).eq("week_start", s.week).select("id");
+          let err = updErr;
+          if (!err && (!upd || upd.length === 0)) {
+            ({ error: err } = await supabase.from(table).insert({ ...fields, member_id: null, guest_name: name, week_start: s.week, battle_date: s.week }));
+          }
+          if (err) { console.error(`[${table} guest error]`, err); showToast("⚠️ Sign-up failed to save — please try again."); }
+          return;
+        }
         const { error: upsertErr } = await supabase.from(table).upsert({
           member_id: s.userId, week_start: s.week, battle_date: s.week,
           power: s.power, squad_type: s.squadType, availability: s.availability,
@@ -1633,7 +1659,11 @@ export default function App() {
       });
       if (next.length < prev.length) {
         prev.forEach(async (p) => {
-          if (!next.find(n => String(n.userId) === String(p.userId) && n.week === p.week)) {
+          if (!next.find(n => sameSignupId(n.userId, p.userId) && n.week === p.week)) {
+            if (isGuestId(p.userId)) {
+              await supabase.from(table).delete().is("member_id", null).eq("guest_name", guestNameOf(p.userId)).eq("week_start", p.week);
+              return;
+            }
             await supabase.from(table).delete().eq("member_id", p.userId).eq("week_start", p.week);
             recountSignupCount(p.userId);
           }
@@ -4132,23 +4162,33 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
   const [hideAssigned, setHideAssigned] = useState(false);
 
   const openAdminSignup = () => {
-    setAdminSignupForm({ memberId: "", power: "", squadType: "", availability: "confirmed", timePreference: "either", canFlexTime: "" });
+    setAdminSignupForm({ kind: "member", memberId: "", guestName: "", power: "", squadType: "", availability: "confirmed", timePreference: "either", canFlexTime: "" });
     setAdminSignupOpen(true);
   };
 
   const saveAdminSignup = () => {
     const f = adminSignupForm;
-    if (!f.memberId) { showToast("Select a member."); return; }
+    const isGuest = f.kind === "guest";
+    const guestName = (f.guestName || "").trim().replace(/\s+/g, " ");
+    if (isGuest) {
+      if (!guestName) { showToast("Enter their username."); return; }
+      const asMember = members.find(m => m.username.toLowerCase() === guestName.toLowerCase());
+      if (asMember) { showToast(`${asMember.username} is a member — pick them from the Member list.`); return; }
+    } else if (!f.memberId) { showToast("Select a member."); return; }
     if (!f.power) { showToast("Enter squad power."); return; }
     if (!f.squadType) { showToast("Select squad type."); return; }
     const weekStart = getSignupWeek(tab === "canyon" ? "canyon" : "desert");
-    const signup = { userId: f.memberId, power: f.power, squadType: f.squadType, availability: f.availability, timePreference: f.timePreference, canFlexTime: f.canFlexTime || "", week: weekStart };
-    const notThis = x => !(String(x.userId) === String(f.memberId) && x.week === weekStart);
+    const uid = isGuest ? `${GUEST_PREFIX}${guestName}` : f.memberId;
+    if (isGuest && (tab === "canyon" ? csSignups : dsSignups).some(x => sameSignupId(x.userId, uid) && x.week === weekStart)) {
+      showToast(`${guestName} is already signed up.`); return;
+    }
+    const signup = { userId: uid, guest: isGuest, power: f.power, squadType: f.squadType, availability: f.availability, timePreference: f.timePreference, canFlexTime: f.canFlexTime || "", week: weekStart };
+    const notThis = x => !(sameSignupId(x.userId, uid) && x.week === weekStart);
     if (tab === "canyon") setCsSignups(s => [...s.filter(notThis), signup]);
     else setDsSignups(s => [...s.filter(notThis), signup]);
     setAdminSignupOpen(false);
     setAdminSignupForm(null);
-    showToast(`${members.find(m=>String(m.id)===String(f.memberId))?.username || "Member"} signed up ✓`);
+    showToast(`${isGuest ? guestName : (members.find(m=>String(m.id)===String(f.memberId))?.username || "Member")} signed up ✓`);
   };
 
   const toggleSignups = async (type) => {
@@ -4224,12 +4264,12 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
 
   const saveEditedSignup = async (updated) => {
     if (editSignup.type === "canyon") {
-      setCsSignups(s => s.map(x => String(x.userId) === String(updated.userId) && x.week === getSignupWeek("canyon") ? { ...x, ...updated } : x));
+      setCsSignups(s => s.map(x => sameSignupId(x.userId, updated.userId) && x.week === getSignupWeek("canyon") ? { ...x, ...updated } : x));
     } else {
-      setDsSignups(s => s.map(x => String(x.userId) === String(updated.userId) && x.week === getSignupWeek("desert") ? { ...x, ...updated } : x));
+      setDsSignups(s => s.map(x => sameSignupId(x.userId, updated.userId) && x.week === getSignupWeek("desert") ? { ...x, ...updated } : x));
     }
-    // Also update member's power in Supabase if power changed
-    if (updated.power) {
+    // Also update member's power in Supabase if power changed (not for non-members)
+    if (updated.power && !isGuestId(updated.userId)) {
       const powerInUnits = Math.round(parseFloat(updated.power) * 1000000);
       await supabase.from("members").update({ power: powerInUnits }).eq("id", updated.userId);
       setMembers && setMembers(m => m.map(mb => String(mb.id) === String(updated.userId) ? { ...mb, power: powerInUnits } : mb));
@@ -4238,7 +4278,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
     showToast("Sign-up updated ✓");
   };
 
-  const getName = (userId) => members.find(m => String(m.id) === String(userId))?.username || "Unknown";
+  const getName = (userId) => isGuestId(userId) ? guestNameOf(userId) : (members.find(m => String(m.id) === String(userId))?.username || "Unknown");
 
   const toggleSort = (s) => setSorts(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
 
@@ -4524,10 +4564,28 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
         ) : (
             <div className="card" style={{ marginBottom: 0 }}>
               <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div className="card-title">➕ Add Member Sign-Up</div>
+                <div className="card-title">➕ Add Sign-Up</div>
                 <button className="btn btn-ghost btn-sm" onClick={() => setAdminSignupOpen(false)}>✕</button>
               </div>
               <div className="card-body">
+                <div className="form-group">
+                  <div className="radio-group">
+                    {[["member","Member"],["guest","Non-member"]].map(([val,label]) => (
+                      <div key={val} className={`radio-option ${adminSignupForm.kind === val ? "selected" : ""}`}
+                        onClick={() => setAdminSignupForm(f => ({ ...f, kind: val }))}>
+                        <div className="radio-dot"></div><span style={{ fontSize: 13 }}>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {adminSignupForm.kind === "guest" ? (
+                <div className="form-group">
+                  <label className="form-label">Username</label>
+                  <input className="form-input" value={adminSignupForm.guestName} maxLength={40} autoComplete="off"
+                    onChange={e => setAdminSignupForm(f => ({ ...f, guestName: e.target.value }))}
+                    placeholder="Type their in-game name" />
+                </div>
+                ) : (
                 <div className="form-group">
                   <label className="form-label">Member</label>
                   <select className="form-input form-select" value={adminSignupForm.memberId}
@@ -4539,6 +4597,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
                       .map(m => <option key={m.id} value={m.id}>{m.username}</option>)}
                   </select>
                 </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div className="form-group">
                     <label className="form-label">Squad Power</label>
@@ -4696,7 +4755,9 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
                 <tr key={s.userId ?? i} style={{ background: rowBg }}>
                   <td style={{ fontWeight: 600 }}>
                     {isPriority && <span title="Priority: was on waitlist last week" style={{ color: "var(--gold)", marginRight: 2, fontSize: 10 }}>⭐</span>}
-                    <span style={{ cursor: "pointer" }} onClick={() => setViewMember && setViewMember(members.find(m => String(m.id) === String(s.userId)))}>{getName(s.userId)}</span>
+                    {isGuestId(s.userId)
+                      ? <span title="Non-member">{getName(s.userId)}<span style={{ marginLeft: 4, fontSize: 9, fontWeight: 600, color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: 4, padding: "0 3px" }}>guest</span></span>
+                      : <span style={{ cursor: "pointer" }} onClick={() => setViewMember && setViewMember(members.find(m => String(m.id) === String(s.userId)))}>{getName(s.userId)}</span>}
                   </td>
                   <td>{s.power}</td>
                   <td style={{ fontSize: 10, color: "var(--text-dim)" }} title={s.squadType}>{typeShort}</td>

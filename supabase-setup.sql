@@ -175,3 +175,16 @@ end $$;
 -- Deletes need the old row's details for live updates to remove it on screen
 alter table public.canyon_signups replica identity full;
 alter table public.desert_signups replica identity full;
+
+-- ── Non-member (guest) storm sign-ups, added by R4/admin ────────────────────
+do $$
+declare t text;
+begin
+  foreach t in array array['canyon_signups','desert_signups'] loop
+    execute format('alter table public.%I add column if not exists guest_name text', t);
+    execute format('alter table public.%I alter column member_id drop not null', t);
+    execute format('alter table public.%I drop constraint if exists %I', t, t || '_member_or_guest');
+    execute format('alter table public.%I add constraint %I check (member_id is not null or nullif(trim(guest_name), '''') is not null)', t, t || '_member_or_guest');
+    execute format('create unique index if not exists %I on public.%I (lower(guest_name), week_start) where member_id is null', t || '_guest_week_idx', t);
+  end loop;
+end $$;
