@@ -4829,6 +4829,7 @@ function AdminSignups({ setMembers, setViewMember, csAllSignups, dsAllSignups, c
 }
 // ─── ADMIN MEMBERS ────────────────────────────────────────────────────────────
 function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmin, user }) {
+  const isR4 = user?.role === "r4" || user?.role === "admin";
   const pending = members.filter(m => !m.approved);
   const approved = members.filter(m => m.approved);
   const [resetModal, setResetModal] = useState(null); // { id, username }
@@ -4939,7 +4940,10 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
     setRequireApproval(next);
     showToast(next ? "New accounts now need approval ✓" : "New accounts are approved automatically ✓");
   };
-  const changeRole = (id, role) => { setMembers(m => m.map(mb => mb.id === id ? { ...mb, role } : mb)); showToast(`Role updated to ${role} ✓`); };
+  const changeRole = (id, role) => {
+    const target = members.find(mb => mb.id === id);
+    if (!isAdmin && (role === "admin" || target?.role === "admin" || id === user.id)) { showToast("Only an Admin can do that."); return; }
+    setMembers(m => m.map(mb => mb.id === id ? { ...mb, role } : mb)); showToast(`Role updated to ${role} ✓`); };
 
   return (
     <div>
@@ -5001,6 +5005,11 @@ function AdminMembers({ setViewMember, members, setMembers, t, showToast, isAdmi
                     <option value="member">Member</option>
                     <option value="r4">R4</option>
                     <option value="admin">Admin</option>
+                  </select>
+                ) : isR4 && m.id !== user.id && (m.role === "member" || m.role === "r4") ? (
+                  <select className="member-role" value={m.role} onChange={e => changeRole(m.id, e.target.value)} aria-label={`Role for ${m.username}`}>
+                    <option value="member">Member</option>
+                    <option value="r4">R4</option>
                   </select>
                 ) : <span className="badge badge-gold" style={{ fontSize: 10, padding: "2px 6px" }}>{m.role}</span>}
               </td>
